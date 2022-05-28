@@ -26,7 +26,7 @@
                     {contents}
                     
                     <div id="footer">
-                        Generated on {gen_date} with <a href="http://www.google.com" target="_blank">DocGen</a>
+                        Generated on {gen_date} with <a href="https://github.com/oschildt/PhpDoxy" target="_blank">PhpDoxy</a>
                     </div>                    
                 </div>
             </div>
@@ -40,20 +40,6 @@
         
         <script src="resources/jquery.iviewer.js" type="text/javascript"></script>
         <script src="resources/jquery.mousewheel.js" type="text/javascript"></script>
-        
-        <script type="text/javascript">
-            $(window).resize(function(){
-                $("#viewer").height(1400);
-            });
-
-            $(document).ready(function() {
-                $("#viewer").iviewer({src: 'resources/classes.svg', zoom_animation: false});
-                $('#viewer img').bind('dragstart', function(event){
-                    event.preventDefault();
-                });
-                $(window).resize();
-            });
-        </script>
         
     </body>
 </html>
