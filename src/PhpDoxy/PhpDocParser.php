@@ -1024,9 +1024,9 @@ class PhpDocParser
     {
         $this->buildNamespaceHierarchy();
 
-        $this->sortObjectLists();
-
         $this->processDocBlocks();
+    
+        $this->sortObjectLists();
     } // postProcess
 
     protected function sortObjectLists()
@@ -1064,6 +1064,10 @@ class PhpDocParser
                 uasort($children, $sort_function);
             }
         }
+    
+        uasort($this->dictionary["todos"], $sort_function);
+        uasort($this->dictionary["deprecated"], $sort_function);
+        uasort($this->dictionary["since"], $sort_function);
 
         uasort($this->dictionary["functions"], $sort_function);
 
@@ -1642,11 +1646,12 @@ class PhpDocParser
 
     protected function resolveObjectTypeNames(&$object_descriptor)
     {
+        $read_name = $this->getNameByType($object_descriptor["type"]);
+        $appendix = "\nFile: " . $object_descriptor["source_file"]["full_name"] . ", line: " . $object_descriptor["start_line"];
+
         if (!empty($object_descriptor["see"])) {
             foreach ($object_descriptor["see"] as &$see) {
                 if (!$this->resolveTypeName($object_descriptor["source_file"]["uses_map"], $see["reference"])) {
-                    $read_name = $this->getNameByType($object_descriptor["type"]);
-                    $appendix = "\nFile: " . $object_descriptor["source_file"]["full_name"] . ", line: " . $object_descriptor["start_line"];
                     PhpDocWatcher::trackWarning("The @see tag in the docblock of the $read_name '" . $object_descriptor["name"] . "' refers to non-existing object '$see[reference]'!" . $appendix);
                 }
             }
@@ -1654,7 +1659,9 @@ class PhpDocParser
 
         if (!empty($object_descriptor["uses"])) {
             foreach ($object_descriptor["uses"] as &$use) {
-                $this->resolveTypeName($object_descriptor["source_file"]["uses_map"], $use["reference"]);
+                if (!$this->resolveTypeName($object_descriptor["source_file"]["uses_map"], $use["reference"])) {
+                    PhpDocWatcher::trackWarning("The @uses tag in the docblock of the $read_name '" . $object_descriptor["name"] . "' refers to non-existing object '$use[reference]'!" . $appendix);
+                }
 
                 if (!empty($this->dictionary["lookup"][$use["reference"]])) {
                     $this->dictionary["lookup"][$use["reference"]]["used-by"][$object_descriptor["full_name"]] = [

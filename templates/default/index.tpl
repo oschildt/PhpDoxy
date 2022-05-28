@@ -183,12 +183,12 @@
           <td>
               <a href="{trait_link}">{trait_name}</a>
           </td>
-          <td trait="namespace_column">
+          <td class="namespace_column">
               <!-- if namespace -->
               <a href="{namespace_link}">{namespace}</a>
               <!-- endif namespace -->
           </td>
-          <td trait="description_column">
+          <td class="description_column">
               {trait_description}
           </td>
       </tr>

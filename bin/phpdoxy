@@ -112,6 +112,12 @@ function generate($argv): void
             throw new \Exception("The target file path '" . $orig_target_parent . "' is invalid or does not exist!");
         } while (false);
 
+        if (!file_exists($target_parent . DIRECTORY_SEPARATOR . basename($config["target"]))) {
+            if (!mkdir($target_parent . DIRECTORY_SEPARATOR . basename($config["target"]))) {
+                throw new \Exception("The target file path '" . $orig_target_parent . "' can not be created!");
+            }
+        }
+
         $config["target"] = realpath($target_parent . DIRECTORY_SEPARATOR . basename($config["target"]));
         echo_standard("\nTarget directory: " . $config["target"]);
 
