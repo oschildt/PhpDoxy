@@ -1,0 +1,37 @@
+{
+  "name": "smartfactory/phpdoxy",
+  "type": "library",
+  "description": "Documentation Generator for PHP",
+  "keywords": [
+    "documentation",
+    "generator"
+  ],
+  "bin": [
+    "bin/phpdoxy"
+  ],
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "Oleg Schildt",
+      "email": "oleg.schildt@gmail.com"
+    }
+  ],
+  "autoload": {
+    "psr-4": {
+      "PhpDoxy\\": "src/PhpDoxy"
+    },
+    "files": [
+      "src/echo_functions.php",
+      "src/utils.php",
+      "src/error_handling.php"
+    ]
+  },
+  "require": {
+    "php": ">=8.0",
+    "nikic/php-parser": "^4.13",
+    "kukulich/fshl": "^2.1",
+    "phpdocumentor/reflection-docblock": "^5.3",
+    "erusev/parsedown": "^1.7",
+    "erusev/parsedown-extra": "^0.8.1"
+  }
+}

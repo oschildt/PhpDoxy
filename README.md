@@ -1,2 +1,2 @@
 # PhpDoxy
-PHP documentation geenrator
+PHP documentation generator
