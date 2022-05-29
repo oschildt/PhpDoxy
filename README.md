@@ -163,7 +163,7 @@ This part is optional and should be used if you want to include your own files i
 
 - The title for the contents of your file.
 - The short menu title.
-- The path to the file with the contents. The path can be either absolute or relative. If the path is relative, the PhpDoxytries to 
+- The path to the file with the contents. The path can be either absolute or relative. If the path is relative, the PhpDoxy tries to 
   find the path based from the directory containing the configuration file and from the working directory.
 
 ### Demo
