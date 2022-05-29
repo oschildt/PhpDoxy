@@ -139,7 +139,7 @@ The configuration for the documentation generation is setup in the XML file *php
 ```
 **title**
 
-The name of you project or library. 
+The name of your project or library. 
 
 **source**
 
@@ -153,7 +153,7 @@ tries to find the path based from the directory containing the configuration fil
 
 **template**
 
-The name of the template to be used for the generation. PhpDoxy has the directory *templates* in its base directory. There reside the templates.
+The name of the template to be used for the generation. PhpDoxy has the directory *templates* in its base directory. There,  the templates reside.
 Alernatively, you can specify absolute or relative path to the template. If the path is relative, the PhpDoxy
 tries to find the path based from the directory containing the configuration file and from the working directory.
 
@@ -163,8 +163,8 @@ This part is optional and should be used if you want to include your own files i
 
 - The title for the contents of your file.
 - The short menu title.
-- The path to the file with the contents. The path can be either absolute or relative. If the path is relative, the PhpDoxy
-- tries to find the path based from the directory containing the configuration file and from the working directory.
+- The path to the file with the contents. The path can be either absolute or relative. If the path is relative, the PhpDoxytries to 
+  find the path based from the directory containing the configuration file and from the working directory.
 
 ### Demo
 
