@@ -109,7 +109,7 @@ with your code to be documented and the target directory for the generated docum
 
 #### Command Line
 
-The composer creates a "binary" script *vendor/bin/phpdoxy* in the vendor directory. You can call it from command line this:
+The composer creates a "binary" script *vendor/bin/phpdoxy* in the vendor directory. You can call it from command line like this:
 
 ```
 vendor/bin/phpdoxy phpdoxy_config.xml
