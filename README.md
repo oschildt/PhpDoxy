@@ -104,7 +104,7 @@ require_once "vendor/autoload.php";
 
 1. Put the script to the directory of your application. Ensure that the including of the *vendor/autoload.php* is valid.
 2. Put the configuration file *phpdoxy_config.xml* to the directory of your application and specify there the source directory 
-with your code to be documentated and the target directory for the generated documentation.
+with your code to be documented and the target directory for the generated documentation.
 3. Run the *generate.php* from your browser.
 
 #### Command Line
