@@ -30,15 +30,16 @@ composer require smartfactory/phpdoxy"
 
 ### Key features
 
-- It can be run from WEB and command line.
 - Detailed reporting of the object statistics by the processing.
-- Detailed reporting of the warning and errors like typing errors, missing descriptions,
-dead references etc. with referecne to the source file and line.
+- Detailed reporting of the warning and errors like typing errors, missing descriptions, dead references etc. with referecne to the source file and line.
 - Smart resolving of the short object names, based on the context, and linking recognized objects to their documentation. 
 - Ability to include user defined files into the documentation.
 - Useful object lookup, displaying results while typing, and direct jump to the found object (no serverside logic necessary, pure JavaScript solution).
-- Summarizing changes, todos and deprecated notes in a special page.
-- Customizing look and feel of the documentation through adjusting templates or extending the renderer.
+- Formatted source code files are also included as documentation. Each object has a reference to the source file and the line. The developer does not need to go
+  to the real source files and look for the implementation details, he can directly jump to and study it in the documentation. 
+- Summarizing changes, todos and deprecated notes in a special page *Log*.
+- It can be run from WEB and command line.
+- Customizing look and feel of the documentation through adjusting the template or extending the renderer.
 
 ### Supported tags
 
@@ -167,7 +168,7 @@ http://php-smart-factory.org/
 
 ### Demo
 
-http://php-smart-factory.org/
+https://github.com/oschildt/PhpDoxyDemo
 
 1. Git-clone the demo application and run 'composer update'.
 2. Run *generate.php* from your browser or *generate.cmd/generate.sh*.
