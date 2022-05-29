@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<config>
+    <title>SmartFactory Library</title>
+
+    <source>test_src</source>
+    <target>test_docs</target>
+    <template>default</template>
+
+    <user_files>
+        <user_file title="Directory structure - SmartFactory Library" menu_title="Structure">
+            add_doc\structure.html
+        </user_file>
+    </user_files>
+</config>

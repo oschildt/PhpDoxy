@@ -1,6 +1,6 @@
 {
   "name": "smartfactory/phpdoxy",
-  "type": "library",
+  "type": "project",
   "description": "Documentation Generator for PHP",
   "keywords": [
     "documentation",
@@ -23,7 +23,8 @@
     "files": [
       "src/echo_functions.php",
       "src/utils.php",
-      "src/error_handling.php"
+      "src/error_handling.php",
+      "src/generate.php"
     ]
   },
   "require": {
