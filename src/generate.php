@@ -11,7 +11,11 @@ function generate($argv): void
     if (php_sapi_name() == "cli") {
         $working_dir = getcwd();
     } else {
-        $working_dir = __DIR__;
+        $stack = debug_backtrace();
+        $firstFrame = $stack[count($stack) - 1];
+        $initialFile = $firstFrame['file'];
+        
+        $working_dir = dirname($initialFile);
     }
     
     echo_standard("\n");
