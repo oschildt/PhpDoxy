@@ -7,7 +7,9 @@ class PhpDocGenerator
     protected $dictionary;
     
     protected $config;
+    protected $source_dir;
     protected $target_dir;
+    protected $template_dir;
     protected $gen_date;
     
     public function __construct(&$dictionary)
