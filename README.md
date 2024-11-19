@@ -25,7 +25,7 @@ composer require smartfactory/phpdoxy"
 
   "require": {
     "php": ">=8.0",
-    "smartfactory/phpdoxy": ">=1.0.3"
+    "smartfactory/phpdoxy": ">=1.0.4"
   }
   
   ...
