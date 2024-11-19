@@ -2,8 +2,6 @@
 
 namespace PhpDoxy;
 
-require_once "vendor/autoload.php";
-
 function generate($argv): void
 {
     $start = time();
