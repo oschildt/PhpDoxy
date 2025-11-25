@@ -28,11 +28,11 @@
     ]
   },
   "require": {
-    "php": ">=8.0",
-    "nikic/php-parser": "^4.13",
-    "kukulich/fshl": "^2.1",
-    "phpdocumentor/reflection-docblock": "^5.3",
-    "erusev/parsedown": "^1.7",
-    "erusev/parsedown-extra": "^0.8.1"
+    "php": ">=8.4",
+    "nikic/php-parser": "*",
+    "kukulich/fshl": "*",
+    "phpdocumentor/reflection-docblock": "*",
+    "erusev/parsedown": "*",
+    "erusev/parsedown-extra": "*"
   }
 }

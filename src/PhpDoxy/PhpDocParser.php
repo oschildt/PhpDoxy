@@ -393,9 +393,11 @@ class PhpDocParser
 
         if ($stmt->returnType) {
             $rtype = $stmt->returnType->getType();
-
+            
             if ($rtype == "Identifier") {
                 $object_descriptor["return_type"] = (string)$stmt->returnType->name;
+            } elseif ($rtype == "NullableType") {
+                $object_descriptor["return_type"] = "null";
             } elseif ($rtype == "Name") {
                 $object_descriptor["return_type"] = (string)$stmt->returnType;
             } elseif ($rtype == "UnionType") {
@@ -404,10 +406,10 @@ class PhpDocParser
                     $object_descriptor["return_type"] .= $type . "|";
                 }
 
-                $object_descriptor["return_type"] = trim($object_descriptor["return_type"], "|");
+                $object_descriptor["return_type"] = trim($object_descriptor["return_type"] ?? "", "|");
             }
 
-            $object_descriptor["return_type"] = trim($object_descriptor["return_type"]);
+            $object_descriptor["return_type"] = trim($object_descriptor["return_type"] ?? "");
         }
 
         $object_descriptor["params"] = [];
@@ -422,6 +424,8 @@ class PhpDocParser
 
                     if ($vtype == "Identifier") {
                         $param_data["val_type"] = (string)$param->type->name;
+                    } elseif ($vtype == "NullableType") {
+                        $param_data["val_type"] = "null";
                     } elseif ($vtype == "Name") {
                         $param_data["val_type"] = (string)$param->type;
                     } elseif ($vtype == "UnionType") {
@@ -475,6 +479,8 @@ class PhpDocParser
 
             if ($vtype == "Identifier") {
                 $val_type = (string)$stmt->type->name;
+            } elseif ($vtype == "NullableType") {
+                $val_type = "null";
             } elseif ($vtype == "Name") {
                 $val_type = (string)$stmt->type;
             } elseif ($vtype == "UnionType") {
@@ -579,6 +585,8 @@ class PhpDocParser
         if ($stmt->returnType) {
             if ($stmt->returnType->getType() == "Identifier") {
                 $object_descriptor["return_type"] = (string)$stmt->returnType->name;
+            } elseif ($stmt->returnType->getType() == "NullableType") {
+                $object_descriptor["return_type"] = "null";
             } elseif ($stmt->returnType->getType() == "Name") {
                 $object_descriptor["return_type"] = (string)$stmt->returnType;
             } elseif ($stmt->returnType->getType() == "UnionType") {
@@ -591,7 +599,7 @@ class PhpDocParser
                 $object_descriptor["return_type"] = $return_type;
             }
 
-            $object_descriptor["return_type"] = trim($object_descriptor["return_type"]);
+            $object_descriptor["return_type"] = trim($object_descriptor["return_type"] ?? "");
         }
 
         $object_descriptor["params"] = [];
@@ -607,6 +615,8 @@ class PhpDocParser
 
                     if ($vtype == "Identifier") {
                         $param_data["val_type"] = (string)$param->type->name;
+                    } elseif ($vtype == "NullableType") {
+                        $param_data["val_type"] = "null";
                     } elseif ($vtype == "Name") {
                         $param_data["val_type"] = (string)$param->type;
                     } elseif ($vtype == "UnionType") {
@@ -831,16 +841,8 @@ class PhpDocParser
 
         // We need this approach, otherwise the docblocks by subparts of
         // some compelx statements disappear!
-        $lexer = new \PhpParser\Lexer\Emulative([
-            'usedAttributes' => [
-                'comments',
-                'startLine',
-                'endLine',
-                'startTokenPos',
-                'endTokenPos',
-            ],
-        ]);
-        $parser = new \PhpParser\Parser\Php7($lexer);
+        $lexer = new \PhpParser\Lexer\Emulative();
+        $parser = new \PhpParser\Parser\Php8($lexer);
 
         $traverser = new \PhpParser\NodeTraverser();
         $traverser->addVisitor(new \PhpParser\NodeVisitor\CloningVisitor());
