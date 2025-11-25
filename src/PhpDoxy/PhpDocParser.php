@@ -840,7 +840,7 @@ class PhpDocParser
         // parsing
 
         // We need this approach, otherwise the docblocks by subparts of
-        // some compelx statements disappear!
+        // some complex statements disappear!
         $lexer = new \PhpParser\Lexer\Emulative();
         $parser = new \PhpParser\Parser\Php8($lexer);
 

@@ -30,9 +30,9 @@
   "require": {
     "php": ">=8.4",
     "nikic/php-parser": "*",
-    "kukulich/fshl": "*",
+    "smartfactory/fshl": "*",
     "phpdocumentor/reflection-docblock": "*",
-    "erusev/parsedown": "*",
-    "erusev/parsedown-extra": "*"
+    "erusev/parsedown": "dev-master as 1.0.0",
+    "erusev/parsedown-extra": "dev-master as 1.0.0"
   }
 }

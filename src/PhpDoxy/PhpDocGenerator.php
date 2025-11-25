@@ -2,6 +2,8 @@
 
 namespace PhpDoxy;
 
+use ParsedownExtra;
+
 class PhpDocGenerator
 {
     protected $dictionary;
@@ -901,7 +903,7 @@ class PhpDocGenerator
     protected function generateSourceFiles()
     {
         echo_standard("\nCreating source files");
-        
+
         $highlighter = new \FSHL\Highlighter(new \FSHL\Output\Html());
         $highlighter->setLexer(new \FSHL\Lexer\Php());
         $highlighter->setOptions(\FSHL\Highlighter::OPTION_TAB_INDENT | \FSHL\Highlighter::OPTION_LINE_COUNTER);
@@ -915,7 +917,7 @@ class PhpDocGenerator
             
             $contents = trim(file_get_contents($this->source_dir . $object_descriptor["relative_path"]));
             $contents = $highlighter->highlight($contents);
-            
+
             $contents = preg_replace("/<span class=\"line\">(\s*)(\\d+):/", "<span class=\"line\" id=\"$2\">$1$2:", $contents);
             
             $contents = str_ireplace("{contents}", $contents, $source_code_template);
@@ -1963,7 +1965,7 @@ class PhpDocGenerator
             return $matches[0];
         }, $text);
         
-        $parsedown = new \ParsedownExtra();
+        $parsedown = new ParsedownExtra();
         $parsedown->setUrlsLinked(false);
         
         $text = $parsedown->text($text);
