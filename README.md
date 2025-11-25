@@ -14,7 +14,7 @@ http://php-smart-factory.org/smartfactory/
 ### Installation
 
 ```
-composer require smartfactory/phpdoxy"
+composer require "smartfactory/phpdoxy"
 ```
 
 **composer.json**
