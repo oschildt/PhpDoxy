@@ -9,7 +9,7 @@ http://php-smart-factory.org/smartfactory/
 
 ### Requirements
 
-- PHP 8.4
+- PHP 8.4+
 
 ### Installation
 
@@ -25,7 +25,7 @@ composer require "smartfactory/phpdoxy"
 
   "require": {
     "php": ">=8.4",
-    "smartfactory/phpdoxy": ">=1.0.7"
+    "smartfactory/phpdoxy": ">=1.0.8"
   }
   
   ...
