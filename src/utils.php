@@ -2,7 +2,7 @@
 
 namespace PhpDoxy;
 
-function aux_dump_array(&$array, $level, $max, $filter = [])
+function aux_dump_array(array $array, int $level, int $max, array $filter = []): void
 {
     if (!empty($array["short_name"]) && !empty($filter) &&
         !in_array($array["short_name"], $filter)) {
@@ -35,26 +35,17 @@ function aux_dump_array(&$array, $level, $max, $filter = [])
     echo $indent2 . "]\n\n";
 }
 
-function preg_p_escape($pttr)
+function preg_p_escape(string $pttr): string
 {
     return preg_replace("/[\\\\\\[\\]\\+\\?\\-\\^\\$\\(\\)\\/\\.\\|\\{\\}\\|]/", "\\\\$0", $pttr);
 } // preg_p_escape
 
-function get_templates_dir()
+function get_templates_dir(): false|string
 {
     return realpath(__DIR__ . DIRECTORY_SEPARATOR . "../templates");
 } // get_templates_dir
 
-function &checkempty(&$var)
-{
-    if ($var === null) {
-        $var = "";
-    }
-
-    return $var;
-} // checkempty
-
-function checkIf(string $token_name, string &$contents, callable $fun)
+function checkIf(string $token_name, string &$contents, callable $fun): void
 {
     if (!preg_match("/<!-- if $token_name -->(.*?)<!-- endif $token_name -->/ism", $contents, $matches)) {
         $fun($contents, false);
@@ -68,7 +59,7 @@ function checkIf(string $token_name, string &$contents, callable $fun)
     }
 } // checkIf
 
-function checkForeach(string $token_name, string &$contents, callable $fun)
+function checkForeach(string $token_name, string &$contents, callable $fun): void
 {
     if (!preg_match("/<!-- foreach $token_name -->(.*?)<!-- endforeach $token_name -->/ism", $contents, $matches)) {
         return;
@@ -82,7 +73,7 @@ function checkForeach(string $token_name, string &$contents, callable $fun)
     $contents = str_replace($block, $body, $contents);
 } // checkForeach
 
-function explodeRow(&$row, &$contents)
+function explodeRow(array $row, string &$contents): void
 {
     foreach ($row as $key => $val) {
         checkIf($key, $contents, function (&$body, $iffound) use ($key, $val) {
@@ -91,7 +82,7 @@ function explodeRow(&$row, &$contents)
                 return;
             }
 
-            if(is_array($val)) {
+            if (is_array($val)) {
                 explodeArray($key, $val, $body);
             } else {
                 $body = str_replace("{" . $key . "}", $val, $body);
@@ -100,7 +91,7 @@ function explodeRow(&$row, &$contents)
     }
 } // explodeRow
 
-function explodeArray($token_name, &$array, &$contents)
+function explodeArray(string $token_name, array $array, string &$contents): void
 {
     checkIf($token_name, $contents, function (&$body, $iffound) use ($token_name, $array) {
         if (empty($array) && $iffound) {

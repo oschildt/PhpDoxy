@@ -1,3 +1,3 @@
-%~dp0vendor\bin\phpdoxy phpdoxy_config.xml
+%~dp0..\..\..\..\vendor\bin\phpdoxy phpdoxy_config.xml
 
 pause

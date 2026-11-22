@@ -1,7 +1,6 @@
 ## PhpDoxy
 
-PhpDoxy is a performant and efficient generator for handful PHP documentation with robust checking for typing errors, missing descriptions,
-dead references etc.
+PhpDoxy generates PHP API documentation and reports malformed type annotations, missing descriptions, and unresolved references with source locations.
 
 ### Example
 
@@ -9,7 +8,8 @@ http://php-smart-factory.org/smartfactory/
 
 ### Requirements
 
-- PHP 8.4+
+- PHP 8.5 or newer for running PhpDoxy
+- PHP source syntax through PHP 8.5
 
 ### Installation
 
@@ -24,8 +24,8 @@ composer require "smartfactory/phpdoxy"
   ...
 
   "require": {
-    "php": ">=8.4",
-    "smartfactory/phpdoxy": ">=1.0.8"
+    "php": ">=8.5",
+    "smartfactory/phpdoxy": ">=2.0.0"
   }
   
   ...
@@ -34,9 +34,10 @@ composer require "smartfactory/phpdoxy"
 
 ### Key features
 
-- Detailed reporting of the object statistics by the processing.
-- Detailed reporting of the warning and errors like typing errors, missing descriptions, dead references etc. with referecne to the source file and line.
-- Smart resolving of the short object names, based on the context, and linking recognized objects to their documentation. 
+- Declaration counts and diagnostics with source locations.
+- Cross-references resolved using each declaration's namespace and imports.
+- Native PHP signatures with separate PHPDoc types, including array shapes, generic types, callable signatures, and templates.
+- Documentation for enum cases, attributes, promoted properties, property hooks, and asymmetric visibility.
 - Ability to include user defined files into the documentation.
 - Useful object lookup, displaying results while typing, and direct jump to the found object (no serverside logic necessary, pure JavaScript solution).
 - Formatted source code files are also included as documentation. Each object has a reference to the source file and the line. The developer does not need to go
@@ -59,6 +60,7 @@ composer require "smartfactory/phpdoxy"
 - @return
 - @see
 - @since
+- @template, @template-covariant, @template-contravariant
 - @throws
 - @todo
 - @uses & @used-by
@@ -117,6 +119,8 @@ vendor/bin/phpdoxy phpdoxy_config.xml
 
 If the configuration file resides in the working directory, it can be omitted by call.
 
+The command returns status 0 when generation completes, including when it reports documentation warnings. Generation failures return status 1.
+
 ### Configuration
 
 The configuration for the documentation generation is setup in the XML file *phpdoxy_config.xml*.
@@ -126,7 +130,10 @@ The configuration for the documentation generation is setup in the XML file *php
 <config>
     <title>SmartFactory Library</title>
 
-    <source>test_src</source>
+    <sources>
+        <source>test_src</source>
+        <source>examples_src</source>
+    </sources>
     <target>test_docs</target>
     <template>default</template>
 
@@ -141,21 +148,37 @@ The configuration for the documentation generation is setup in the XML file *php
 
 The name of your project or library. 
 
-**source**
+**sources**
 
-The source directory wuth your code to be documentated. The path can be either absolute or relative. If the path is relative, the PhpDoxy
-tries to find the path based from the directory containing the configuration file and from the working directory.
+Use one or more `<source>` elements inside `<sources>`. Relative paths are resolved against the configuration directory, then the working directory.
+PhpDoxy scans the directories recursively in the listed order and builds a single site. Source pages are labeled by directory when more than one directory is configured.
+When separate source directories declare the same symbol, the first declaration supplies the API page and PhpDoxy reports a warning. The source pages are generated for both files.
+Markdown files in the source directories become standalone pages titled after their filename. They share the site's styling, including PHP syntax highlighting, and are accessible by direct links. Relative links between discovered Markdown files are converted to the generated page URLs.
+
+Links in Markdown pages and PHPDoc descriptions open in a new tab. Use the source filename to link to a generated Markdown page.
+
+```php
+/**
+ * See the [Redis throttling guide](markdown:RedisRequestThrottlingManager.md)
+ * for setup and usage.
+ *
+ * @link markdown:RedisRequestThrottlingManager.md Redis throttling guide
+ *
+ * @author Oleg Schildt
+ */
+```
+
+The `markdown:` syntax also works in standalone Markdown pages. PhpDoxy first resolves the name or relative path from the file containing the link. A bare filename can also match a unique Markdown file across the configured sources. If several files share the name, specify a relative path such as `markdown:../guides/setup.md`.
 
 **target**
 
-The target directory for the generated documentation. The path can be either absolute or relative. If the path is relative, the PhpDoxy
-tries to find the path based from the directory containing the configuration file and from the working directory.
+The dedicated output directory. Its parent must exist. Relative paths are resolved against the configuration directory, then the working directory.
+Use an empty directory, a new path, or an existing PhpDoxy site. PhpDoxy builds the new site next to the target and replaces the previous site after a successful build.
 
 **template**
 
-The name of the template to be used for the generation. PhpDoxy has the directory *templates* in its base directory. There,  the templates reside.
-Alernatively, you can specify absolute or relative path to the template. If the path is relative, the PhpDoxy
-tries to find the path based from the directory containing the configuration file and from the working directory.
+The template name or a path to a template directory. Relative paths are resolved against the configuration directory, the working directory, then PhpDoxy's bundled *templates* directory.
+The default class, interface, and trait templates include the shared *members.tpl* partial.
 
 **user_files**
 
@@ -176,20 +199,7 @@ https://github.com/oschildt/PhpDoxyDemo
 
 ### Implementation details
 
-The documentation generation is divided in two parts:
+*PhpDocParser* parses PHP declarations with PHP-Parser and type annotations with PHPStan's PHPDoc Parser. The documentation dictionary holds declaration, namespace, and member relationships by reference and may contain cycles.
 
-- Parsing and creating data model.
-- Generating the documentation files based on the data model. 
-
-The *PhpDocParser* parses the source files and creates a *dictionary* (a connected graph) of objects with recursive linking to each other
-by reference. Do not try to dump it! It is circular recursive.
-
-This *dictionary* is a pure data model with complete infromation about all objects and their relations, which can be used for the generation
-of the documentation.
-
-The *PhpDocGenerator* ueses the *dictionary* and generates the documentation. It is responsible for visual presentation and structuring of the 
-documentation.
-
-
-
+*PhpDocGenerator* renders that dictionary into HTML. It uses PHP's tokenizer to highlight declarations, PHP examples, and source pages with physical line anchors. PHPStan can check the semantic compatibility of PHPDoc types with PHP signatures and code.
 

@@ -2,47 +2,24 @@
 
 namespace PhpDoxy;
 
-class AuxNodeVisitor extends \PhpParser\NodeVisitorAbstract
-{
-    protected $value_type = "";
-    protected $params = [];
+use PhpParser\Node;
+use PhpParser\Node\Stmt;
+use PhpParser\PhpVersion;
+use PhpParser\PrettyPrinter\Standard;
+use PHPStan\PhpDocParser\Ast\Attribute;
+use PHPStan\PhpDocParser\Ast\PhpDoc\InvalidTagValueNode;
+use PHPStan\PhpDocParser\Ast\PhpDoc\ParamTagValueNode;
+use PHPStan\PhpDocParser\Ast\PhpDoc\PhpDocTagNode;
+use PHPStan\PhpDocParser\Ast\PhpDoc\TemplateTagValueNode;
+use PHPStan\PhpDocParser\Ast\PhpDoc\TypelessParamTagValueNode;
+use PHPStan\PhpDocParser\Parser\ParserException;
+use phpDocumentor\Reflection\DocBlock\Tags\InvalidTag;
 
-    function __construct($value_type, $params)
-    {
-        $this->value_type = $value_type;
-        $this->params = $params;
-    }
-
-    public function enterNode(\PhpParser\Node $node)
-    {
-        if ($node->getType() == "Stmt_Function" || $node->getType() == "Stmt_ClassMethod") {
-            $node->stmts = [];
-
-            if (!empty($this->value_type)) {
-                $node->returnType = new \PhpParser\Node\Name($this->value_type);
-            }
-
-            if (!empty($node->params)) {
-                foreach ($node->params as &$param) {
-                    if (empty($this->params["$" . $param->var->name])) {
-                        continue;
-                    }
-
-                    $param->type = new \PhpParser\Node\Name($this->params["$" . $param->var->name]);
-                }
-            }
-        }
-
-        if ($node->getType() == "Stmt_Property") {
-            if (!empty($this->value_type)) {
-                $node->type = new \PhpParser\Node\Name($this->value_type);
-            }
-        }
-
-        $node->setAttribute('comments', []);
-    }
-} // AuxNodeVisitor
-
+/**
+ * Builds the documentation model from PHP declarations and their doc comments.
+ *
+ * @author Oleg Schildt
+ */
 class PhpDocParser
 {
     protected int $foundGlobalVars = 0;
@@ -62,35 +39,148 @@ class PhpDocParser
     protected int $foundTraitsTotal = 0;
 
     protected string $current_source_file;
+    protected string $current_source_root;
+    protected string $current_source_label;
     protected string $current_namespace;
     protected string $current_package;
+    protected array $scanned_directories = [];
 
     // Do not dup this, it is recursive by ref
     protected array $dictionary;
 
-    protected \phpDocumentor\Reflection\DocBlockFactory $docblock_factory;
+    protected DocBlockReader $docblock_reader;
+    protected Standard $printer;
+    protected \PhpParser\Parser $parser;
+    protected ReferenceResolver $references;
 
-    protected function getPhpStatement(&$stmt, $value_type, $params)
+    /**
+     * Prints a native PHP declaration, optionally restricted to one declared item.
+     *
+     * @param Node\Stmt $statement
+     * The declaration to print without its leading doc comment.
+     *
+     * @param Node\Const_|Node\PropertyItem|null $item
+     * A single constant or property from a grouped declaration.
+     *
+     * @return string
+     * Returns the declaration with attributes and native types. Named function and method bodies are omitted.
+     *
+     * @author Oleg Schildt
+     */
+    protected function getPhpStatement(Node\Stmt $statement, Node\Const_|Node\PropertyItem|null $item = null): string
     {
-        $prettyPrinter = new \PhpParser\PrettyPrinter\Standard();
-        $traverser = new \PhpParser\NodeTraverser();
-        $traverser->addVisitor(new AuxNodeVisitor($value_type, $params));
+        $statement = clone $statement;
 
-        return $prettyPrinter->prettyPrint($traverser->traverse([$stmt]));
+        $statement->setAttribute('comments', []);
+
+        if ($item instanceof Node\Const_) {
+            $statement->consts = [clone $item];
+            $statement->consts[0]->setAttribute('comments', []);
+        } elseif ($item instanceof Node\PropertyItem) {
+            $statement->props = [clone $item];
+            $statement->props[0]->setAttribute('comments', []);
+        }
+
+        if ($statement instanceof Stmt\ClassLike) {
+            $statement->stmts = [];
+        }
+
+        if ($statement instanceof Stmt\Function_ || $statement instanceof Stmt\ClassMethod) {
+            $statement->stmts = $statement->stmts === null ? null : [];
+            $code = $this->printer->prettyPrint([$statement]);
+
+            return preg_replace('/\s*\{\s*\}$/D', ';', $code);
+        }
+
+        return $this->printer->prettyPrint([$statement]);
     } // getPhpStatement
 
-    protected function injectChild(&$object_descriptor, $object_type)
+    /**
+     * Converts a native type to its display form, preserving parentheses in DNF types.
+     *
+     * @param Node\Identifier|Node\Name|Node\ComplexType|null $type
+     * The original type from the PHP declaration, if specified.
+     *
+     * @return string
+     * Returns a native type expression or an empty string.
+     *
+     * @author Oleg Schildt
+     */
+    protected function nativeType(Node\Identifier|Node\Name|Node\ComplexType|null $type): string
     {
-        if (!empty($this->dictionary[$object_type][$object_descriptor["full_name"]])) {
-            $read_name = $this->getNameByType($object_descriptor["type"]);
+        return $type === null ? '' : $this->printer->prettyPrint([$type]);
+    } // nativeType
 
-            PhpDocWatcher::trackError("The $read_name '" . $object_descriptor["name"] . "' defined in:\n" .
-                "\nFile: " . $object_descriptor["source_file"]["full_name"] . ", line: " . $object_descriptor["start_line"] .
-                "\nhas another definition in\n" .
-                "\nFile: " . $this->dictionary[$object_type][$object_descriptor["full_name"]]["source_file"]["full_name"] . ", line: " . $this->dictionary[$object_type][$object_descriptor["full_name"]]["start_line"]
-            );
+    /**
+     * Extracts native parameter types, defaults, and calling conventions.
+     *
+     * @param list<Node\Param> $params
+     * The parameters in declaration order.
+     *
+     * @return array<string, array<string, mixed>>
+     * Returns descriptors indexed by the parameter name, including its dollar sign.
+     *
+     * @author Oleg Schildt
+     */
+    protected function describeParameters(array $params): array
+    {
+        $result = [];
 
-            return;
+        foreach ($params as $param) {
+            $name = '$' . $param->var->name;
+            $result[$name] = [
+                'name' => $name,
+                'val_type' => $this->nativeType($param->type),
+                'by_ref' => $param->byRef,
+                'variadic' => $param->variadic,
+                'default_value' => $param->default === null ? '' : $this->printer->prettyPrintExpr($param->default),
+            ];
+        }
+
+        return $result;
+    } // describeParameters
+
+    /**
+     * Registers a top-level declaration and associates it with its file, namespace, and package.
+     *
+     * @param array<string, mixed> $object_descriptor
+     * The declaration to register by reference.
+     *
+     * @param string $object_type
+     * The name of the top-level collection that owns the declaration.
+     *
+     * @return bool
+     * Returns true on registration. Keeps the first descriptor and reports duplicate declarations.
+     *
+     * @author Oleg Schildt
+     */
+    protected function injectChild(array &$object_descriptor, string $object_type): bool
+    {
+        $name = $object_descriptor['full_name'];
+        $existing = $this->dictionary[$object_type][$name] ?? null;
+
+        if ($existing === null && in_array($object_type, ['classes', 'interfaces', 'traits'], true)) {
+            $symbol = $this->dictionary['lookup'][$name] ?? null;
+
+            if (in_array($symbol['type'] ?? null, ['class', 'interface', 'trait', 'enum'], true)) {
+                $existing = $symbol;
+            }
+        }
+
+        if ($existing !== null) {
+            $read_name = $this->getNameByType($object_descriptor['type']);
+            $source = $object_descriptor['source_file'];
+            $original = $existing['source_file'];
+            $message = "The $read_name '$name' at {$source['full_name']}:{$object_descriptor['start_line']}"
+                . " is also declared at {$original['full_name']}:{$existing['start_line']}.";
+
+            if ($source['source_root'] === $original['source_root']) {
+                PhpDocWatcher::trackError($message);
+            } else {
+                PhpDocWatcher::trackWarning($message . ' Using the declaration from the first source directory.');
+            }
+
+            return false;
         }
 
         switch ($object_type) {
@@ -125,6 +215,8 @@ class PhpDocParser
                 break;
         }
 
+        $statement = $object_descriptor['parent_stmt'] ?? $object_descriptor['stmt'];
+        $object_descriptor['name_context'] = $statement->getAttribute('docNameContext');
         $this->dictionary[$object_type][$object_descriptor["full_name"]] = &$object_descriptor;
 
         if ($object_type != "global_variables") {
@@ -136,22 +228,27 @@ class PhpDocParser
         $this->dictionary["packages"][$this->current_package]["children"][$object_type][$object_descriptor["full_name"]] = &$object_descriptor;
 
         $this->dictionary["lookup"][$object_descriptor["full_name"]] = &$object_descriptor;
+
+        return true;
     } // injectChild
 
+    /**
+     * Indexes supported declarations at file or namespace scope.
+     *
+     * @param list<Node\Stmt> $stmts
+     * The statements in a file or a namespace block.
+     *
+     * @return void
+     * Registers declarations in the documentation model.
+     *
+     * @author Oleg Schildt
+     */
     protected function analyze(&$stmts): void
     {
         foreach ($stmts as &$stmt) {
             switch ($stmt->getType()) {
                 case "Stmt_Namespace":
-                    $this->analyzeNamespase($stmt);
-                    break;
-
-                case "Stmt_Use":
-                    $this->analyzeUseExpression($stmt);
-                    break;
-
-                case "Stmt_GroupUse":
-                    $this->analyzeGroupUseExpression($stmt);
+                    $this->analyzeNamespace($stmt);
                     break;
 
                 case "Stmt_Const":
@@ -167,15 +264,10 @@ class PhpDocParser
                     break;
 
                 case "Stmt_Interface":
-                    $this->analyzeInterfaceExpression($stmt);
-                    break;
-
                 case "Stmt_Class":
-                    $this->analyzeClassExpression($stmt);
-                    break;
-
+                case "Stmt_Enum":
                 case "Stmt_Trait":
-                    $this->analyzeTraitExpression($stmt);
+                    $this->analyzeClassExpression($stmt);
                     break;
 
                 default:
@@ -184,13 +276,24 @@ class PhpDocParser
         }
     } // analyze
 
-    protected function analyzeStmtExpression(&$stmt)
+    /**
+     * Indexes file-level assignments to statically named global variables.
+     *
+     * @param Stmt\Expression $stmt
+     * The expression statement to examine.
+     *
+     * @return void
+     * Registers directly assigned variables with a known name.
+     *
+     * @author Oleg Schildt
+     */
+    protected function analyzeStmtExpression(Stmt\Expression $stmt): void
     {
         if ($stmt->expr->getType() != "Expr_Assign") {
             return;
         }
 
-        if ($stmt->expr->var->getType() != "Expr_Variable") {
+        if (!$stmt->expr->var instanceof Node\Expr\Variable || !is_string($stmt->expr->var->name)) {
             return;
         }
 
@@ -212,508 +315,338 @@ class PhpDocParser
         $this->injectChild($object_descriptor, "global_variables");
     } // analyzeStmtExpression
 
-    protected function analyzeClassExpression(&$stmt)
+    /**
+     * Indexes a named class, interface, trait, or enum and its supported members.
+     *
+     * @param Stmt\ClassLike $stmt
+     * A named class-like declaration.
+     *
+     * @return void
+     * Registers the declaration and its members in the documentation model.
+     *
+     * @author Oleg Schildt
+     */
+    protected function analyzeClassExpression(Stmt\ClassLike $stmt): void
     {
-        $object_name = (string)$stmt->name->name;
+        $type = match (true) {
+            $stmt instanceof Stmt\Enum_ => 'enum',
+            $stmt instanceof Stmt\Interface_ => 'interface',
+            $stmt instanceof Stmt\Trait_ => 'trait',
+            default => 'class',
+        };
+        $name = $stmt->name->toString();
+        $object_descriptor = [
+            'type' => $type,
+            'flags' => $stmt->flags ?? 0,
+            'name' => $name,
+            'short_name' => $name,
+            'full_name' => '\\' . $stmt->namespacedName->toString(),
+            'start_line' => $stmt->getStartLine(),
+            'docblock' => $stmt->getDocComment()?->getText() ?? '',
+            'stmt' => $stmt,
+            'properties' => [],
+            'constants' => [],
+            'methods' => [],
+        ];
+        $object_descriptor['source_file'] = &$this->dictionary['source_files'][$this->current_source_file];
+        $extends = $stmt instanceof Stmt\Interface_ ? $stmt->extends : array_filter([$stmt->extends ?? null]);
 
-        $object_descriptor = [];
-
-        $object_descriptor["type"] = "class";
-        $object_descriptor["flags"] = $stmt->flags;
-
-        $object_descriptor["name"] = $object_name;
-        $object_descriptor["short_name"] = $object_name;
-        $object_descriptor["full_name"] = rtrim($this->current_namespace, "\\") . "\\" . $object_name;
-
-        $object_descriptor["source_file"] = &$this->dictionary["source_files"][$this->current_source_file];
-        $object_descriptor["start_line"] = $stmt->getLine();
-
-        if (!empty($stmt->extends)) {
-            $object_descriptor["extends"][] = $stmt->extends->toCodeString();
+        foreach ($extends as $parent) {
+            $object_descriptor['extends'][] = $parent->getAttribute('resolvedName', $parent)->toCodeString();
         }
 
-        if (!empty($stmt->implements)) {
-            foreach ($stmt->implements as $implement) {
-                $object_descriptor["implements"][] = $implement->toCodeString();
-            }
+        foreach ($stmt->implements ?? [] as $interface) {
+            $object_descriptor['implements'][] = $interface->getAttribute('resolvedName', $interface)->toCodeString();
         }
 
-        $object_descriptor["docblock"] = $stmt->getDocComment() ? $stmt->getDocComment()->getText() : "";
+        $collection = $type === 'enum' ? 'classes' : $type . ($type === 'class' ? 'es' : 's');
 
-        $object_descriptor["properties"] = [];
-        $object_descriptor["constants"] = [];
-        $object_descriptor["methods"] = [];
-
-        $this->injectChild($object_descriptor, "classes");
-
-        if (empty($stmt->stmts)) {
+        if (!$this->injectChild($object_descriptor, $collection)) {
             return;
         }
 
-        // const and methods
-
-        foreach ($stmt->stmts as &$substmt) {
-            switch ($substmt->getType()) {
-                case "Stmt_ClassConst":
-                    $this->analyzeClassConstExpression($substmt, $object_descriptor);
-                    break;
-
-                case "Stmt_ClassMethod":
-                    $this->analyzeClassMethodExpression($substmt, $object_descriptor);
-                    break;
-
-                case "Stmt_Property":
-                    $this->analyzeClassPropertyExpression($substmt, $object_descriptor);
-                    break;
-
-                case "Stmt_TraitUse":
-                    $this->analyzeClassUseTraitExpression($substmt, $object_descriptor);
-                    break;
+        foreach ($stmt->stmts as $member) {
+            if ($member instanceof Stmt\ClassConst) {
+                $this->analyzeClassConstExpression($member, $object_descriptor);
+            } elseif ($member instanceof Stmt\ClassMethod) {
+                $this->analyzeClassMethodExpression($member, $object_descriptor);
+            } elseif ($member instanceof Stmt\Property) {
+                $this->analyzeClassPropertyExpression($member, $object_descriptor);
+            } elseif ($member instanceof Stmt\TraitUse) {
+                $this->analyzeClassUseTraitExpression($member, $object_descriptor);
+            } elseif ($member instanceof Stmt\EnumCase) {
+                $this->analyzeEnumCase($member, $object_descriptor);
             }
         }
     } // analyzeClassExpression
 
-    protected function analyzeTraitExpression(&$stmt)
+    /**
+     * Indexes a method and any properties declared by constructor promotion.
+     *
+     * @param Stmt\ClassMethod $stmt
+     * The method declaration.
+     *
+     * @param array<string, mixed> $parent_descriptor
+     * The class-like descriptor that owns the method.
+     *
+     * @return void
+     * Registers the method and its promoted properties.
+     *
+     * @author Oleg Schildt
+     */
+    protected function analyzeClassMethodExpression(Stmt\ClassMethod $stmt, array &$parent_descriptor): void
     {
-        $object_name = (string)$stmt->name->name;
+        $name = $stmt->name->toString() . '()';
+        $object_descriptor = [
+            'type' => 'method',
+            'flags' => $stmt->flags,
+            'by_ref' => $stmt->byRef,
+            'name' => $parent_descriptor['name'] . '::' . $name,
+            'short_name' => $name,
+            'full_name' => $parent_descriptor['full_name'] . '::' . $name,
+            'stmt' => $stmt,
+            'start_line' => $stmt->getStartLine(),
+            'docblock' => $stmt->getDocComment()?->getText() ?? '',
+            'params' => $this->describeParameters($stmt->params),
+            'return_type' => $this->nativeType($stmt->returnType),
+            'name_context' => $parent_descriptor['name_context'],
+        ];
+        $object_descriptor['source_file'] = &$parent_descriptor['source_file'];
+        $object_descriptor['parent'] = &$parent_descriptor;
+        $parent_descriptor['methods'][$object_descriptor['full_name']] = &$object_descriptor;
+        $this->dictionary['lookup'][$object_descriptor['full_name']] = &$object_descriptor;
 
-        $object_descriptor = [];
+        foreach ($stmt->params as $param) {
+            if ($param->isPromoted()) {
+                $property = new Stmt\Property(
+                    $param->flags,
+                    [new Node\PropertyItem($param->var->name, null, $param->getAttributes())],
+                    $param->getAttributes(),
+                    $param->type,
+                    $param->attrGroups,
+                    $param->hooks
+                );
 
-        $object_descriptor["type"] = "trait";
+                $property->setAttribute('docPromoted', true);
 
-        $object_descriptor["name"] = $object_name;
-        $object_descriptor["short_name"] = $object_name;
-        $object_descriptor["full_name"] = rtrim($this->current_namespace, "\\") . "\\" . $object_name;
-
-        $object_descriptor["source_file"] = &$this->dictionary["source_files"][$this->current_source_file];
-        $object_descriptor["start_line"] = $stmt->getLine();
-
-        if (!empty($stmt->extends)) {
-            $object_descriptor["extends_names_only"][] = $stmt->extends->toCodeString();
-        }
-
-        if (!empty($stmt->implements)) {
-            foreach ($stmt->implements as $implement) {
-                $object_descriptor["implements_names_only"][] = $implement->toCodeString();
+                $this->analyzeClassPropertyExpression($property, $parent_descriptor);
             }
         }
-
-        $object_descriptor["docblock"] = $stmt->getDocComment() ? $stmt->getDocComment()->getText() : "";
-
-        $object_descriptor["constants"] = [];
-        $object_descriptor["methods"] = [];
-
-        $this->injectChild($object_descriptor, "traits");
-
-        if (empty($stmt->stmts)) {
-            return;
-        }
-
-        // const and methods
-
-        foreach ($stmt->stmts as &$substmt) {
-            switch ($substmt->getType()) {
-                case "Stmt_ClassConst":
-                    $this->analyzeClassConstExpression($substmt, $object_descriptor);
-                    break;
-
-                case "Stmt_ClassMethod":
-                    $this->analyzeClassMethodExpression($substmt, $object_descriptor);
-                    break;
-
-                case "Stmt_Property":
-                    $this->analyzeClassPropertyExpression($substmt, $object_descriptor);
-                    break;
-            }
-        }
-    } // analyzeTraitExpression
-
-    protected function analyzeInterfaceExpression(&$stmt)
-    {
-        $object_name = (string)$stmt->name->name;
-
-        $object_descriptor = [];
-
-        $object_descriptor["type"] = "interface";
-
-        $object_descriptor["name"] = $object_name;
-        $object_descriptor["short_name"] = $object_name;
-        $object_descriptor["full_name"] = rtrim($this->current_namespace, "\\") . "\\" . $object_name;
-
-        $object_descriptor["source_file"] = &$this->dictionary["source_files"][$this->current_source_file];
-        $object_descriptor["start_line"] = $stmt->getLine();
-
-        if (!empty($stmt->extends)) {
-            foreach ($stmt->extends as $extend) {
-                $object_descriptor["extends"][] = $extend->toCodeString();
-            }
-        }
-
-        $object_descriptor["docblock"] = $stmt->getDocComment() ? $stmt->getDocComment()->getText() : "";
-
-        $object_descriptor["constants"] = [];
-        $object_descriptor["methods"] = [];
-
-        $this->injectChild($object_descriptor, "interfaces");
-
-        if (empty($stmt->stmts)) {
-            return;
-        }
-
-        // const and methods
-
-        foreach ($stmt->stmts as &$substmt) {
-            switch ($substmt->getType()) {
-                case "Stmt_ClassConst":
-                    $this->analyzeClassConstExpression($substmt, $object_descriptor);
-                    break;
-
-                case "Stmt_ClassMethod":
-                    $this->analyzeClassMethodExpression($substmt, $object_descriptor);
-                    break;
-            }
-        }
-    } // analyzeInterfaceExpression
-
-    protected function analyzeClassMethodExpression(&$stmt, &$parent_descriptor)
-    {
-        $object_name = (string)$stmt->name->name;
-
-        $object_descriptor = [];
-
-        $object_descriptor["type"] = "method";
-        $object_descriptor["flags"] = $stmt->flags;
-        $object_descriptor["by_ref"] = !empty($stmt->byRef);
-
-        $object_descriptor["name"] = $parent_descriptor["name"] . "::" . $object_name . "()";
-        $object_descriptor["short_name"] = $object_name . "()";
-        $object_descriptor["full_name"] = $parent_descriptor["full_name"] . "::" . $object_name . "()";
-
-        $object_descriptor["stmt"] = &$stmt;
-
-        if ($stmt->returnType) {
-            $rtype = $stmt->returnType->getType();
-            
-            if ($rtype == "Identifier") {
-                $object_descriptor["return_type"] = (string)$stmt->returnType->name;
-            } elseif ($rtype == "NullableType") {
-                $object_descriptor["return_type"] = "null";
-            } elseif ($rtype == "Name") {
-                $object_descriptor["return_type"] = (string)$stmt->returnType;
-            } elseif ($rtype == "UnionType") {
-                $object_descriptor["return_type"] = "";
-                foreach ($stmt->returnType->types as $type) {
-                    $object_descriptor["return_type"] .= $type . "|";
-                }
-
-                $object_descriptor["return_type"] = trim($object_descriptor["return_type"] ?? "", "|");
-            }
-
-            $object_descriptor["return_type"] = trim($object_descriptor["return_type"] ?? "");
-        }
-
-        $object_descriptor["params"] = [];
-        if (!empty($stmt->params)) {
-            foreach ($stmt->params as &$param) {
-                $param_data = [];
-                $param_data["name"] = "$" . $param->var->name;
-                $param_data["stmt"] = &$param;
-
-                if ($param->type) {
-                    $vtype = $param->type->getType();
-
-                    if ($vtype == "Identifier") {
-                        $param_data["val_type"] = (string)$param->type->name;
-                    } elseif ($vtype == "NullableType") {
-                        $param_data["val_type"] = "null";
-                    } elseif ($vtype == "Name") {
-                        $param_data["val_type"] = (string)$param->type;
-                    } elseif ($vtype == "UnionType") {
-                        $param_data["val_type"] = "";
-                        foreach ($param->type->types as $type) {
-                            $param_data["val_type"] .= $type . "|";
-                        }
-
-                        $param_data["val_type"] = trim($param_data["val_type"], "|");
-                    }
-                }
-
-                $param_data["by_ref"] = !empty($param->byRef);
-                $param_data["variadic"] = !empty($param->variadic);
-
-                $object_descriptor["params"][$param_data["name"]] = &$param_data;
-
-                unset($param_data);
-            }
-        }
-
-        $object_descriptor["source_file"] = &$this->dictionary["source_files"][$this->current_source_file];
-        $object_descriptor["start_line"] = $stmt->getLine();
-
-        $object_descriptor["docblock"] = $stmt->getDocComment() ? $stmt->getDocComment()->getText() : "";
-
-        $object_descriptor["parent"] = &$parent_descriptor;
-        $parent_descriptor["methods"][$object_descriptor["full_name"]] = &$object_descriptor;
-
-        $this->dictionary["lookup"][$object_descriptor["full_name"]] = &$object_descriptor;
     } // analyzeClassMethodExpression
 
-    protected function analyzeClassUseTraitExpression(&$stmt, &$parent_descriptor)
+    /**
+     * Indexes an enum case as a linkable member of its enum.
+     *
+     * @param Stmt\EnumCase $stmt
+     * The case declaration, with its value for backed enums.
+     *
+     * @param array<string, mixed> $parent_descriptor
+     * The owning enum descriptor.
+     *
+     * @return void
+     * Adds the case to the enum's member list and the symbol index.
+     *
+     * @author Oleg Schildt
+     */
+    protected function analyzeEnumCase(Stmt\EnumCase $stmt, array &$parent_descriptor): void
+    {
+        $name = $stmt->name->toString();
+        $full_name = $parent_descriptor['full_name'] . '::' . $name;
+        $descriptor = [
+            'type' => 'enum_case',
+            'name' => $parent_descriptor['name'] . '::' . $name,
+            'short_name' => $name,
+            'full_name' => $full_name,
+            'start_line' => $stmt->getStartLine(),
+            'stmt' => $stmt,
+            'docblock' => $stmt->getDocComment()?->getText() ?? '',
+            'val_type' => $this->nativeType($parent_descriptor['stmt']->scalarType),
+            'name_context' => $parent_descriptor['name_context'],
+        ];
+        $descriptor['source_file'] = &$parent_descriptor['source_file'];
+        $descriptor['parent'] = &$parent_descriptor;
+        $parent_descriptor['constants'][$full_name] = &$descriptor;
+        $this->dictionary['lookup'][$full_name] = &$descriptor;
+    } // analyzeEnumCase
+
+    /**
+     * Records the resolved names of traits used by a class-like declaration.
+     *
+     * @param Stmt\TraitUse $stmt
+     * The trait-use statement.
+     *
+     * @param array<string, mixed> $parent_descriptor
+     * The class-like descriptor that uses these traits.
+     *
+     * @return void
+     * Appends fully qualified trait names.
+     *
+     * @author Oleg Schildt
+     */
+    protected function analyzeClassUseTraitExpression(Stmt\TraitUse $stmt, array &$parent_descriptor): void
     {
         foreach ($stmt->traits as $trait) {
-            $parent_descriptor["uses_traits"][] = $trait->toCodeString();
+            $parent_descriptor['uses_traits'][] = $trait->getAttribute('resolvedName', $trait)->toCodeString();
         }
     } // analyzeClassUseTraitExpression
 
-    protected function analyzeClassPropertyExpression(&$stmt, &$parent_descriptor)
+    /**
+     * Indexes property declarations and their individual doc comments.
+     *
+     * @param Stmt\Property $stmt
+     * The statement containing the declarations and any property hooks.
+     *
+     * @param array<string, mixed> $parent_descriptor
+     * The owning class-like descriptor.
+     *
+     * @return void
+     * Registers each declaration and its source location.
+     *
+     * @author Oleg Schildt
+     */
+    protected function analyzeClassPropertyExpression(Stmt\Property $stmt, array &$parent_descriptor): void
     {
-        if (empty($stmt->props)) {
-            return;
+        $common_docblock = $stmt->getDocComment()?->getText() ?? '';
+        $type = $this->nativeType($stmt->type);
+
+        foreach ($stmt->props as $item) {
+            $name = '$' . $item->name->toString();
+            $full_name = $parent_descriptor['full_name'] . '::' . $name;
+            $descriptor = [
+                'type' => 'property',
+                'promoted' => $stmt->getAttribute('docPromoted', false),
+                'flags' => $stmt->flags,
+                'val_type' => $type,
+                'name_context' => $parent_descriptor['name_context'],
+                'name' => $parent_descriptor['name'] . '::' . $name,
+                'short_name' => $name,
+                'full_name' => $full_name,
+                'start_line' => count($stmt->props) === 1 ? $stmt->getStartLine() : $item->getStartLine(),
+                'docblock' => $item->getDocComment()?->getText() ?? $common_docblock,
+                'stmt' => $item,
+                'parent_stmt' => $stmt,
+            ];
+            $descriptor['source_file'] = &$parent_descriptor['source_file'];
+            $descriptor['parent'] = &$parent_descriptor;
+            $parent_descriptor['properties'][$full_name] = &$descriptor;
+            $this->dictionary['lookup'][$full_name] = &$descriptor;
+
+            // Each dictionary entry owns a distinct descriptor.
+            unset($descriptor);
         }
-
-        $common_docblock = $stmt->getDocComment() ? $stmt->getDocComment()->getText() : "";
-
-        $val_type = "";
-        if ($stmt->type) {
-            $vtype = $stmt->type->getType();
-
-            if ($vtype == "Identifier") {
-                $val_type = (string)$stmt->type->name;
-            } elseif ($vtype == "NullableType") {
-                $val_type = "null";
-            } elseif ($vtype == "Name") {
-                $val_type = (string)$stmt->type;
-            } elseif ($vtype == "UnionType") {
-                $val_type = "";
-                foreach ($stmt->type->types as $type) {
-                    $val_type .= $type . "|";
-                }
-
-                $val_type = trim($val_type, "|");
-            }
-        }
-
-        $flags = $stmt->flags;
-
-        foreach ($stmt->props as &$prop) {
-            $object_name = "$" . $prop->name->name;
-
-            $object_descriptor = [];
-            $object_descriptor["type"] = "property";
-            $object_descriptor["flags"] = $flags;
-
-            $object_descriptor["name"] = $parent_descriptor["name"] . "::" . $object_name;
-            $object_descriptor["short_name"] = $object_name;
-            $object_descriptor["full_name"] = $parent_descriptor["full_name"] . "::" . $object_name;
-
-            $object_descriptor["val_type"] = $val_type;
-
-            $object_descriptor["source_file"] = &$this->dictionary["source_files"][$this->current_source_file];
-            $object_descriptor["start_line"] = $prop->getLine();
-
-            $object_descriptor["docblock"] = $prop->getDocComment() ? $prop->getDocComment()->getText() : "";
-            if (empty($object_descriptor["docblock"])) {
-                $object_descriptor["docblock"] = $common_docblock;
-            }
-
-            $object_descriptor["stmt"] = &$prop;
-            $object_descriptor["parent_stmt"] = &$stmt;
-
-            $object_descriptor["parent"] = &$parent_descriptor;
-            $parent_descriptor["properties"][$object_descriptor["full_name"]] = &$object_descriptor;
-
-            $this->dictionary["lookup"][$object_descriptor["full_name"]] = &$object_descriptor;
-
-            // this is important to prevent reusing the same reference
-            unset($object_descriptor);
-        } // foreach prop
     } // analyzeClassPropertyExpression
 
-    protected function analyzeClassConstExpression(&$stmt, &$parent_descriptor)
+    /**
+     * Indexes class constant declarations and their individual doc comments.
+     *
+     * @param Stmt\ClassConst $stmt
+     * The statement containing the declarations and attributes.
+     *
+     * @param array<string, mixed> $parent_descriptor
+     * The owning class-like descriptor.
+     *
+     * @return void
+     * Registers each declaration and its source location.
+     *
+     * @author Oleg Schildt
+     */
+    protected function analyzeClassConstExpression(Stmt\ClassConst $stmt, array &$parent_descriptor): void
     {
-        if (empty($stmt->consts)) {
-            return;
+        $common_docblock = $stmt->getDocComment()?->getText() ?? '';
+        $type = $this->nativeType($stmt->type);
+
+        foreach ($stmt->consts as $item) {
+            $name = $item->name->toString();
+            $full_name = $parent_descriptor['full_name'] . '::' . $name;
+            $descriptor = [
+                'type' => 'class_constant',
+                'flags' => $stmt->flags,
+                'val_type' => $type,
+                'name_context' => $parent_descriptor['name_context'],
+                'name' => $parent_descriptor['name'] . '::' . $name,
+                'short_name' => $name,
+                'full_name' => $full_name,
+                'start_line' => count($stmt->consts) === 1 ? $stmt->getStartLine() : $item->getStartLine(),
+                'docblock' => $item->getDocComment()?->getText() ?? $common_docblock,
+                'stmt' => $item,
+                'parent_stmt' => $stmt,
+            ];
+            $descriptor['source_file'] = &$parent_descriptor['source_file'];
+            $descriptor['parent'] = &$parent_descriptor;
+            $parent_descriptor['constants'][$full_name] = &$descriptor;
+            $this->dictionary['lookup'][$full_name] = &$descriptor;
+
+            // Each dictionary entry owns a distinct descriptor.
+            unset($descriptor);
         }
-
-        $common_docblock = $stmt->getDocComment() ? $stmt->getDocComment()->getText() : "";
-        $flags = $stmt->flags;
-
-        foreach ($stmt->consts as &$const) {
-            $object_name = (string)$const->name->name;
-
-            $object_descriptor = [];
-            $object_descriptor["type"] = "class_constant";
-            $object_descriptor["flags"] = $flags;
-
-            $object_descriptor["name"] = $parent_descriptor["name"] . "::" . $object_name;
-            $object_descriptor["short_name"] = $object_name;
-            $object_descriptor["full_name"] = $parent_descriptor["full_name"] . "::" . $object_name;
-
-            $object_descriptor["source_file"] = &$this->dictionary["source_files"][$this->current_source_file];
-            $object_descriptor["start_line"] = $const->getLine();
-
-            $object_descriptor["docblock"] = $const->getDocComment() ? $const->getDocComment()->getText() : "";
-            if (empty($object_descriptor["docblock"])) {
-                $object_descriptor["docblock"] = $common_docblock;
-            }
-
-            $object_descriptor["stmt"] = &$const;
-
-            $object_descriptor["parent"] = &$parent_descriptor;
-            $parent_descriptor["constants"][$object_descriptor["full_name"]] = &$object_descriptor;
-
-            $this->dictionary["lookup"][$object_descriptor["full_name"]] = &$object_descriptor;
-
-            // this is important to prevent reusing the same reference
-            unset($object_descriptor);
-        } // foreach const
     } // analyzeClassConstExpression
 
-    protected function analyzeFunctionExpression(&$stmt)
+    /**
+     * Registers a free function and records its native signature.
+     *
+     * @param Stmt\Function_ $stmt
+     * The function declaration.
+     *
+     * @return void
+     * Adds the function and its parameters to the documentation model.
+     *
+     * @author Oleg Schildt
+     */
+    protected function analyzeFunctionExpression(Stmt\Function_ $stmt): void
     {
-        $object_name = (string)$stmt->name->name;
+        $name = $stmt->name->toString() . '()';
+        $descriptor = [
+            'type' => 'function',
+            'by_ref' => $stmt->byRef,
+            'name' => $name,
+            'short_name' => $name,
+            'full_name' => '\\' . $stmt->namespacedName->toString() . '()',
+            'start_line' => $stmt->getStartLine(),
+            'docblock' => $stmt->getDocComment()?->getText() ?? '',
+            'stmt' => $stmt,
+            'params' => $this->describeParameters($stmt->params),
+            'return_type' => $this->nativeType($stmt->returnType),
+        ];
+        $descriptor['source_file'] = &$this->dictionary['source_files'][$this->current_source_file];
 
-        $object_descriptor = [];
-
-        $object_descriptor["type"] = "function";
-        $object_descriptor["by_ref"] = !empty($stmt->byRef);
-
-        $object_descriptor["name"] = $object_name . "()";
-        $object_descriptor["short_name"] = $object_name . "()";
-        $object_descriptor["full_name"] = rtrim($this->current_namespace, "\\") . "\\" . $object_name . "()";
-
-        if ($stmt->returnType) {
-            if ($stmt->returnType->getType() == "Identifier") {
-                $object_descriptor["return_type"] = (string)$stmt->returnType->name;
-            } elseif ($stmt->returnType->getType() == "NullableType") {
-                $object_descriptor["return_type"] = "null";
-            } elseif ($stmt->returnType->getType() == "Name") {
-                $object_descriptor["return_type"] = (string)$stmt->returnType;
-            } elseif ($stmt->returnType->getType() == "UnionType") {
-                $return_type = "";
-                foreach ($stmt->returnType->types as $type) {
-                    $return_type .= $type . "|";
-                }
-                $return_type = trim($return_type, "|");
-
-                $object_descriptor["return_type"] = $return_type;
-            }
-
-            $object_descriptor["return_type"] = trim($object_descriptor["return_type"] ?? "");
-        }
-
-        $object_descriptor["params"] = [];
-        if (!empty($stmt->params)) {
-            foreach ($stmt->params as &$param) {
-                $param_data = [];
-                $param_data["name"] = "$" . $param->var->name;
-
-                $param_data["stmt"] = &$param;
-
-                if ($param->type) {
-                    $vtype = $param->type->getType();
-
-                    if ($vtype == "Identifier") {
-                        $param_data["val_type"] = (string)$param->type->name;
-                    } elseif ($vtype == "NullableType") {
-                        $param_data["val_type"] = "null";
-                    } elseif ($vtype == "Name") {
-                        $param_data["val_type"] = (string)$param->type;
-                    } elseif ($vtype == "UnionType") {
-                        $param_data["val_type"] = "";
-                        foreach ($param->type->types as $type) {
-                            $param_data["val_type"] .= $type . "|";
-                        }
-
-                        $param_data["val_type"] = trim($param_data["val_type"], "|");
-                    }
-                }
-
-                $param_data["by_ref"] = !empty($param->byRef);
-                $param_data["variadic"] = !empty($param->variadic);
-
-                $object_descriptor["params"][$param_data["name"]] = &$param_data;
-
-                unset($param_data);
-            }
-        }
-
-        $object_descriptor["source_file"] = &$this->dictionary["source_files"][$this->current_source_file];
-        $object_descriptor["start_line"] = $stmt->getLine();
-
-        $object_descriptor["docblock"] = $stmt->getDocComment() ? $stmt->getDocComment()->getText() : "";
-        $object_descriptor["stmt"] = &$stmt;
-
-        $this->injectChild($object_descriptor, "functions");
+        $this->injectChild($descriptor, 'functions');
     } // analyzeFunctionExpression
 
-    protected function analyzeGroupUseExpression(&$stmt)
+    /**
+     * Indexes constant declarations and their individual doc comments.
+     *
+     * @param Stmt\Const_ $stmt
+     * The statement containing the declarations and attributes.
+     *
+     * @return void
+     * Registers each declaration and its source location.
+     *
+     * @author Oleg Schildt
+     */
+    protected function analyzeConstExpression(Stmt\Const_ $stmt): void
     {
-        if (empty($stmt->uses)) {
-            return;
+        $common_docblock = $stmt->getDocComment()?->getText() ?? '';
+
+        foreach ($stmt->consts as $item) {
+            $name = $item->name->toString();
+            $full_name = '\\' . $item->namespacedName->toString();
+            $descriptor = [
+                'type' => 'constant',
+                'name' => $name,
+                'short_name' => $name,
+                'full_name' => $full_name,
+                'start_line' => count($stmt->consts) === 1 ? $stmt->getStartLine() : $item->getStartLine(),
+                'docblock' => $item->getDocComment()?->getText() ?? $common_docblock,
+                'stmt' => $item,
+                'parent_stmt' => $stmt,
+            ];
+            $descriptor['source_file'] = &$this->dictionary['source_files'][$this->current_source_file];
+
+            $this->injectChild($descriptor, 'constants');
+
+            // Each dictionary entry owns a distinct descriptor.
+            unset($descriptor);
         }
-
-        $prefix = $stmt->prefix->toCodeString();
-
-        foreach ($stmt->uses as $use) {
-            $full_path = "\\" . $prefix . "\\" . $use->name->toCodeString();
-
-            $this->dictionary["source_files"][$this->current_source_file]["uses_map"][$full_path] = $full_path;
-        }
-    } // analyzeGroupUseExpression
-
-    protected function analyzeUseExpression(&$stmt)
-    {
-        if (empty($stmt->uses)) {
-            return;
-        }
-
-        foreach ($stmt->uses as $use) {
-            $full_path = "\\" . $use->name->toCodeString();
-
-            if ($use->alias) {
-                $alias = $use->alias->name;
-            } else {
-                $alias = $this->removeNamespacePrefix($full_path);
-            }
-
-            $this->dictionary["source_files"][$this->current_source_file]["uses_map"][$alias] = $full_path;
-        }
-    } // analyzeUseExpression
-
-    protected function analyzeConstExpression(&$stmt)
-    {
-        if (empty($stmt->consts)) {
-            return;
-        }
-
-        $common_docblock = $stmt->getDocComment() ? $stmt->getDocComment()->getText() : "";
-
-        foreach ($stmt->consts as &$const) {
-            $object_name = (string)$const->name->name;
-
-            $object_descriptor = [];
-            $object_descriptor["type"] = "constant";
-
-            $object_descriptor["name"] = $object_name;
-            $object_descriptor["short_name"] = $object_name;
-            $object_descriptor["full_name"] = rtrim($this->current_namespace, "\\") . "\\" . $object_name;
-
-            $object_descriptor["source_file"] = &$this->dictionary["source_files"][$this->current_source_file];
-            $object_descriptor["start_line"] = $const->getLine();
-
-            $object_descriptor["docblock"] = $const->getDocComment() ? $const->getDocComment()->getText() : "";
-            if (empty($object_descriptor["docblock"])) {
-                $object_descriptor["docblock"] = $common_docblock;
-            }
-
-            $object_descriptor["stmt"] = &$const;
-
-            $this->injectChild($object_descriptor, "constants");
-
-            // this is important to prevent reusing the same reference
-            unset($object_descriptor);
-        } // foreach const
     } // analyzeConstExpression
 
     protected function &addNamespace($full_name)
@@ -741,21 +674,47 @@ class PhpDocParser
         return $object_descriptor;
     } // addNamespace
 
-    protected function analyzeNamespase(&$stmt)
+    /**
+     * Indexes declarations in a named or global namespace block.
+     *
+     * @param Stmt\Namespace_ $stmt
+     * The namespace block, whose name may be null for the global namespace.
+     *
+     * @return void
+     * Registers the namespace and its declarations.
+     *
+     * @author Oleg Schildt
+     */
+    protected function analyzeNamespace(Stmt\Namespace_ $stmt): void
     {
-        $object_name = "\\" . $stmt->name->toCodeString();
-        $this->current_namespace = $object_name;
+        $name = '\\' . ($stmt->name?->toString() ?? '');
+        $this->current_namespace = $name;
 
-        if (empty($this->dictionary["namespaces"][$object_name])) {
-            $this->addNamespace($object_name);
+        if (empty($this->dictionary['namespaces'][$name])) {
+            $this->addNamespace($name);
         }
 
-        if (!empty($stmt->stmts)) {
-            $this->analyze($stmt->stmts);
-        }
-    } // analyzeNamespase
+        $this->analyze($stmt->stmts);
+    } // analyzeNamespace
 
-    protected function parseFile($code, $source_file): array
+    /**
+     * Parses a source file and adds its declarations to the current model.
+     *
+     * @param string $code
+     * The complete source file, including any inline HTML.
+     *
+     * @param string $source_file
+     * The file path relative to its source directory, qualified by a directory label for multiple sources.
+     *
+     * @return void
+     * Stores the source and registers its declarations.
+     *
+     * @throws \PhpParser\Error
+     * If the source cannot be parsed or contains invalid imports.
+     *
+     * @author Oleg Schildt
+     */
+    protected function parseFile(string $code, string $source_file): void
     {
         $this->foundGlobalVars = 0;
         $this->foundConstants = 0;
@@ -791,27 +750,37 @@ class PhpDocParser
         $object_descriptor["short_name"] = basename($source_file);
         $object_descriptor["full_name"] = $source_file;
         $object_descriptor["relative_path"] = $source_file;
+        $object_descriptor['source_root'] = $this->current_source_root;
+        $object_descriptor['source_label'] = $this->current_source_label;
         $object_descriptor["source_file"] = &$object_descriptor; // for unification - each object must have a source file
         $object_descriptor["start_line"] = 1;
-        $object_descriptor["uses_map"] = [];
+        $object_descriptor['code'] = $code;
+        $stmts = $this->parser->parse($code) ?? [];
+        $traverser = new \PhpParser\NodeTraverser(new SourceNameResolver(null, ['replaceNodes' => false]));
+        $stmts = $traverser->traverse($stmts);
 
-        $dblocks = array_filter(token_get_all($code), function ($item) {
-            return $item[0] == T_DOC_COMMENT;
-        });
-        $dblock = reset($dblocks);
-        if (!empty($dblock)) {
-            $object_descriptor["docblock"] = $dblock[1];
-        }
-
-        if (!empty($object_descriptor["docblock"])) {
-            $docblock = $this->docblock_factory->create($object_descriptor["docblock"]);
-
-            if ($docblock->hasTag("package")) {
-                $tags = $docblock->getTagsByName("package");
-                foreach ($tags as $tag) {
-                    $this->current_package = trim($tag->getDescription());
-                }
+        foreach (\PhpToken::tokenize($code) as $token) {
+            if (!$token->is(T_DOC_COMMENT)) {
+                continue;
             }
+
+            try {
+                $metadata = $this->docblock_reader->read($token->text)['metadata'];
+                $package = $metadata->getTagsByName('package')[0] ?? null;
+
+                if ($package !== null && !$package instanceof InvalidTag) {
+                    $this->current_package = trim((string) $package->getDescription());
+                }
+
+                if ($this->current_package !== '' || !$this->isDeclarationDocBlock($stmts, $token->pos)) {
+                    $object_descriptor['docblock'] = $token->text;
+                    $object_descriptor['doc_line'] = $token->line;
+                }
+            } catch (ParserException|\InvalidArgumentException $exception) {
+                PhpDocWatcher::trackWarning($source_file . ':' . $token->line . ': ' . $exception->getMessage());
+            }
+
+            break;
         }
 
         if (empty($this->dictionary["packages"][$this->current_package])) {
@@ -837,85 +806,146 @@ class PhpDocParser
 
         $this->dictionary["source_files"][$object_descriptor["full_name"]] = $object_descriptor;
 
-        // parsing
-
-        // We need this approach, otherwise the docblocks by subparts of
-        // some complex statements disappear!
-        $lexer = new \PhpParser\Lexer\Emulative();
-        $parser = new \PhpParser\Parser\Php8($lexer);
-
-        $traverser = new \PhpParser\NodeTraverser();
-        $traverser->addVisitor(new \PhpParser\NodeVisitor\CloningVisitor());
-        $stmts = $parser->parse($code);
-        $stmts = $traverser->traverse($stmts);
-
         $this->analyze($stmts);
-
-        ksort($this->dictionary);
-
-        return $this->dictionary;
     } // parseFile
 
-    protected function processDir($dir, $relative_path)
+    /**
+     * Determines whether the first doc comment belongs to a declaration.
+     *
+     * @param list<Node\Stmt> $statements
+     * The statements at file or namespace scope.
+     *
+     * @param int $position
+     * The byte position of the doc comment in the source.
+     *
+     * @return bool
+     * Returns true when the declaration already owns the comment.
+     *
+     * @author Oleg Schildt
+     */
+    protected function isDeclarationDocBlock(array $statements, int $position): bool
     {
-        $dir = rtrim($dir, "/\\") . DIRECTORY_SEPARATOR;;
-
-        if (!file_exists($dir)) {
-            throw new \Exception("The directory '$dir' does not exists!");
+        foreach ($statements as $statement) {
+            if ($statement instanceof Stmt\Namespace_) {
+                if ($this->isDeclarationDocBlock($statement->stmts, $position)) {
+                    return true;
+                }
+            } elseif ($statement instanceof Stmt\ClassLike || $statement instanceof Stmt\Function_
+                || $statement instanceof Stmt\Const_ || $statement instanceof Stmt\Expression
+            ) {
+                if ($statement->getDocComment()?->getStartFilePos() === $position) {
+                    return true;
+                }
+            }
         }
 
-        echo_highlighted("\n\nProcessing path: " . (empty($relative_path) ? "." : $relative_path));
+        return false;
+    } // isDeclarationDocBlock
+
+    /**
+     * Scans a source directory once in stable order and skips linked entries.
+     *
+     * @param string $dir
+     * The absolute path to the directory being scanned.
+     *
+     * @param string $relative_path
+     * The path relative to the source root, with its label when multiple sources are configured.
+     *
+     * @return void
+     * Processes PHP files, records Markdown documents, and descends into regular child directories.
+     *
+     * @throws \RuntimeException
+     * If the source directory cannot be listed.
+     *
+     * @author Oleg Schildt
+     */
+    protected function processDir(string $dir, string $relative_path): void
+    {
+        $directory_key = DIRECTORY_SEPARATOR === '\\' ? mb_strtolower($dir, 'UTF-8') : $dir;
+
+        if (isset($this->scanned_directories[$directory_key])) {
+            return;
+        }
+
+        echo_highlighted("\n\nProcessing path: " . ($relative_path === '' ? '.' : $relative_path));
 
         $files = scandir($dir);
-        if ($files) {
-            sort($files);
 
-            foreach ($files as $file) {
-                if ($file == "." || $file == "..") {
-                    continue;
-                }
+        if ($files === false) {
+            throw new \RuntimeException("Cannot list source directory '$dir'.");
+        }
 
-                $sub_relative_path = $relative_path;
+        $this->scanned_directories[$directory_key] = true;
+        $directories = [];
 
-                if (!empty($sub_relative_path)) {
-                    $sub_relative_path .= "/";
-                }
-
-                $sub_relative_path .= $file;
-
-                if (pathinfo($dir . $file, PATHINFO_EXTENSION) == "php") {
-                    $this->processFile($dir . $file, $sub_relative_path);
-                }
+        foreach ($files as $file) {
+            if ($file === '.' || $file === '..') {
+                continue;
             }
 
-            foreach ($files as $file) {
-                if ($file == "." || $file == "..") {
-                    continue;
-                }
+            $path = rtrim($dir, '/\\') . DIRECTORY_SEPARATOR . $file;
+            $relative = $relative_path === '' ? $file : $relative_path . '/' . $file;
+            $resolved = realpath($path);
 
-                $sub_relative_path = $relative_path;
+            if ($resolved === false || is_link($path) || !OutputDirectory::samePath($resolved, $path)) {
+                continue;
+            }
 
-                if (!empty($sub_relative_path)) {
-                    $sub_relative_path .= "/";
-                }
+            if (is_dir($path)) {
+                $directories[$relative] = $resolved;
+            } elseif (is_file($path)) {
+                switch (strtolower(pathinfo($file, PATHINFO_EXTENSION))) {
+                    case 'php':
+                        $this->processFile($path, $relative);
+                        break;
 
-                $sub_relative_path .= $file;
-
-                if (is_dir($dir . $file)) {
-                    $this->processDir($dir . $file, $sub_relative_path);
+                    case 'md':
+                        $this->dictionary['markdown_files'][$relative] = $resolved;
+                        break;
                 }
             }
+        }
+
+        foreach ($directories as $relative => $path) {
+            $this->processDir($path, $relative);
         }
     } // processDir
 
-    protected function processFile($file, $relative_path)
+    /**
+     * Reads and indexes one PHP source file and reports failures with source locations.
+     *
+     * @param string $file
+     * The absolute file path.
+     *
+     * @param string $relative_path
+     * The source root relative file path used in documentation and diagnostics.
+     *
+     * @return void
+     * Logs the source file's declaration counts after successful analysis.
+     *
+     * @author Oleg Schildt
+     */
+    protected function processFile(string $file, string $relative_path): void
     {
         $this->foundSourceFilesTotal++;
 
         echo_highlighted2("\n\nProcessing file: $relative_path\n");
 
         $code = file_get_contents($file);
-        $this->parseFile($code, $relative_path);
+
+        if ($code === false) {
+            PhpDocWatcher::trackError("Cannot read source file '$relative_path'.");
+
+            return;
+        }
+
+        try {
+            $this->parseFile($code, $relative_path);
+        } catch (\PhpParser\Error $exception) {
+            PhpDocWatcher::trackError($relative_path . ':' . $exception->getStartLine() . ': ' . $exception->getRawMessage());
+
+            return;
+        }
 
         $somethingFound = false;
         if ($this->foundGlobalVars > 0) {
@@ -948,19 +978,39 @@ class PhpDocParser
         }
     } // processFile
 
-    function &process(&$config)
+    /**
+     * Parses the configured source trees and links the documented declarations across them.
+     *
+     * @param array{sources: non-empty-list<string>} $config
+     * Generation settings containing the source directory paths in priority order.
+     *
+     * @return array<string, array>
+     * Returns the documentation model by reference, including formatted declarations.
+     *
+     * @throws \RuntimeException
+     * If the source list is empty, a directory is invalid, or a directory cannot be scanned.
+     *
+     * @author Oleg Schildt
+     */
+    public function &process(array &$config): array
     {
-        if (empty($config["source"])) {
-            throw new \Exception("Source directory is not specified!");
-        }
+        PhpDocWatcher::reset();
 
-        $source_dir = rtrim($config["source"], "/\\");;
+        $source_dirs = $this->resolveSourceDirectories($config['sources'] ?? []);
 
-        echo_highlighted("\n\nProcessing source files from: " . $source_dir);
-
-        $source_dir .= DIRECTORY_SEPARATOR;;
-
-        $this->docblock_factory = \phpDocumentor\Reflection\DocBlockFactory::createInstance();
+        $this->scanned_directories = [];
+        $this->foundSourceFilesTotal = 0;
+        $this->foundNamespacesTotal = 0;
+        $this->foundGlobalVarsTotal = 0;
+        $this->foundConstantsTotal = 0;
+        $this->foundFunctionTotal = 0;
+        $this->foundClassesTotal = 0;
+        $this->foundInterfacesTotal = 0;
+        $this->foundTraitsTotal = 0;
+        $this->dictionary = [];
+        $this->docblock_reader = new DocBlockReader();
+        $this->parser = (new \PhpParser\ParserFactory())->createForVersion(PhpVersion::fromString('8.5'));
+        $this->printer = new DeclarationPrinter(['phpVersion' => PhpVersion::fromString('8.5')]);
 
         $this->dictionary["namespaces"] = [];
         $this->dictionary["packages"] = [];
@@ -972,17 +1022,25 @@ class PhpDocParser
         $this->dictionary["interfaces"] = [];
         $this->dictionary["traits"] = [];
         $this->dictionary["source_files"] = [];
+        $this->dictionary['markdown_files'] = [];
         $this->dictionary["todos"] = [];
         $this->dictionary["since"] = [];
         $this->dictionary["deprecated"] = [];
 
-        $this->processDir($source_dir, "");
+        $this->processSources($source_dirs);
 
         $this->postProcess();
 
         echo_highlighted("\n\nProcessed source files: " . $this->foundSourceFilesTotal . "\n");
 
         $somethingFound = false;
+
+        if ($this->dictionary['markdown_files'] !== []) {
+            $somethingFound = true;
+
+            echo_standard("\nMarkdown documents: " . count($this->dictionary['markdown_files']));
+        }
+
 
         if ($this->foundNamespacesTotal > 0) {
             $somethingFound = true;
@@ -1022,16 +1080,111 @@ class PhpDocParser
         return $this->dictionary;
     } // process
 
-    protected function postProcess()
+    /**
+     * Resolves configured source paths and retains each directory only once.
+     *
+     * @param list<string> $sources
+     * The configured source directories in scan order.
+     *
+     * @return non-empty-list<string>
+     * Returns the canonical source directories in their original order.
+     *
+     * @throws \RuntimeException
+     * If the source list is empty or one of the paths is not a directory.
+     *
+     * @author Oleg Schildt
+     */
+    protected function resolveSourceDirectories(array $sources): array
+    {
+        if ($sources === []) {
+            throw new \RuntimeException('At least one source directory is required.');
+        }
+
+        $directories = [];
+
+        foreach ($sources as $source) {
+            $directory = $source === '' ? false : realpath($source);
+
+            if ($directory === false || !is_dir($directory)) {
+                throw new \RuntimeException("Source directory '$source' is missing or invalid.");
+            }
+
+            $key = DIRECTORY_SEPARATOR === '\\' ? mb_strtolower($directory, 'UTF-8') : $directory;
+            $directories[$key] ??= $directory;
+        }
+
+        return array_values($directories);
+    } // resolveSourceDirectories
+
+    /**
+     * Assigns unique source directory labels and scans the directories in order.
+     *
+     * @param non-empty-list<string> $directories
+     * The resolved source directories in priority order.
+     *
+     * @throws \RuntimeException
+     * If a directory cannot be listed.
+     *
+     * @author Oleg Schildt
+     */
+    protected function processSources(array $directories): void
+    {
+        $labels = [];
+        $multiple_sources = count($directories) > 1;
+
+        foreach ($directories as $directory) {
+            $label = '';
+
+            if ($multiple_sources) {
+                $base = basename(rtrim($directory, '/\\'));
+                $base = $base === '' ? 'source' : $base;
+                $label = $base;
+                $suffix = 2;
+
+                while (isset($labels[mb_strtolower($label, 'UTF-8')])) {
+                    $label = $base . '-' . $suffix++;
+                }
+
+                $labels[mb_strtolower($label, 'UTF-8')] = true;
+            }
+
+            $this->current_source_root = $directory;
+            $this->current_source_label = $label;
+
+            echo_highlighted("\n\nProcessing source files from: " . $directory);
+
+            $this->processDir($directory, $label);
+        }
+    } // processSources
+
+    /**
+     * Builds the symbol index and resolves documentation after all files have been scanned.
+     *
+     * @return void
+     * Completes hierarchy, documentation, and display ordering in the model.
+     *
+     * @author Oleg Schildt
+     */
+    protected function postProcess(): void
     {
         $this->buildNamespaceHierarchy();
 
+        $this->references = new ReferenceResolver($this->dictionary['lookup']);
+
         $this->processDocBlocks();
-    
+
         $this->sortObjectLists();
     } // postProcess
 
-    protected function sortObjectLists()
+    /**
+     * Sorts declarations and log entries for predictable page output.
+     *
+     * @return void
+     * Orders the collections in the documentation model.
+     *
+     * @author Oleg Schildt
+     */
+    protected function sortObjectLists(): void
     {
         foreach ($this->dictionary as $key => &$block) {
             if ($key == "source_files") {
@@ -1041,12 +1194,8 @@ class PhpDocParser
             ksort($block);
         }
 
-        $sort_function = function (&$a, &$b) {
-            if ($a["name"] == $b["name"]) {
-                return strcmp($a["namespace"]["name"], $b["namespace"]["name"]);
-            }
-
-            return strcmp($a["name"], $b["name"]);
+        $sort_function = static function (array $first, array $second): int {
+            return strcmp($first['name'], $second['name']) ?: strcmp($first['full_name'], $second['full_name']);
         };
 
         ksort($this->dictionary["lookup"]);
@@ -1066,7 +1215,7 @@ class PhpDocParser
                 uasort($children, $sort_function);
             }
         }
-    
+
         uasort($this->dictionary["todos"], $sort_function);
         uasort($this->dictionary["deprecated"], $sort_function);
         uasort($this->dictionary["since"], $sort_function);
@@ -1135,7 +1284,15 @@ class PhpDocParser
         }
     } // buildNamespaceHierarchy
 
-    protected function processDocBlocks()
+    /**
+     * Reads doc blocks for indexed declarations and resolves their inherited members.
+     *
+     * @return void
+     * Completes member documentation and inheritance links.
+     *
+     * @author Oleg Schildt
+     */
+    protected function processDocBlocks(): void
     {
         $types_to_process = ["source_files", "constants", "global_variables", "functions", "classes", "interfaces", "traits"];
 
@@ -1147,34 +1304,22 @@ class PhpDocParser
             foreach ($this->dictionary[$type_to_process] as &$object_descriptor) {
                 $this->processObjectDocBlock($object_descriptor);
 
-                switch ($object_descriptor["type"]) {
-                    case "class":
-                        foreach ($object_descriptor["properties"] as &$property_descriptor) {
-                            $this->processObjectDocBlock($property_descriptor);
-                        }
-
-                    case "interface":
-                        foreach ($object_descriptor["constants"] as &$constant_descriptor) {
-                            $this->processObjectDocBlock($constant_descriptor);
-                        }
-
-                    case "trait":
-                        foreach ($object_descriptor["methods"] as &$method_descriptor) {
-                            $this->processObjectDocBlock($method_descriptor);
-                        }
-                        break;
+                foreach (['methods', 'properties', 'constants'] as $members) {
+                    foreach ($object_descriptor[$members] ?? [] as $key => $unused) {
+                        $this->processObjectDocBlock($object_descriptor[$members][$key]);
+                    }
                 }
             } // foreach object
         } // foreach type
 
-        $types_to_process = ["classes", "interfaces"];
+        $types_to_process = ["classes", "interfaces", "traits"];
 
         foreach ($types_to_process as $type_to_process) {
             foreach ($this->dictionary[$type_to_process] as &$object_descriptor) {
 
                 if (!empty($object_descriptor["properties"])) {
                     foreach ($object_descriptor["properties"] as &$property) {
-                        $property["overrides"] = [];
+                        $property["overrides"] = '';
 
                         $this->checkOverrides($object_descriptor, $property["short_name"], $property["overrides"], "properties");
                     }
@@ -1182,7 +1327,7 @@ class PhpDocParser
 
                 if (!empty($object_descriptor["constants"])) {
                     foreach ($object_descriptor["constants"] as &$constant) {
-                        $constant["overrides"] = [];
+                        $constant["overrides"] = '';
 
                         $this->checkOverrides($object_descriptor, $constant["short_name"], $constant["overrides"], "constants");
                     }
@@ -1190,7 +1335,7 @@ class PhpDocParser
 
                 if (!empty($object_descriptor["methods"])) {
                     foreach ($object_descriptor["methods"] as &$method) {
-                        $method["overrides"] = [];
+                        $method["overrides"] = '';
 
                         $this->checkOverrides($object_descriptor, $method["short_name"], $method["overrides"], "methods");
                     }
@@ -1199,6 +1344,17 @@ class PhpDocParser
         } // foreach type
     } // processDocBlocks
 
+    /**
+     * Returns the human-readable declaration name used in diagnostics.
+     *
+     * @param string $type
+     * The model's declaration type.
+     *
+     * @return string
+     * Returns the display name, or the original type if it has no special label.
+     *
+     * @author Oleg Schildt
+     */
     protected function getNameByType($type)
     {
         switch ($type) {
@@ -1234,6 +1390,10 @@ class PhpDocParser
                 $type = "property";
                 break;
 
+            case "enum_case":
+                $type = "enum case";
+                break;
+
             case "class_constant":
                 $type = "class constant";
                 break;
@@ -1242,27 +1402,60 @@ class PhpDocParser
         return $type;
     } // getNameByType
 
-    protected function processObjectDocBlock(&$object_descriptor)
+    /**
+     * Combines structured PHPDoc with the native data already recorded for a declaration.
+     *
+     * @param array<string, mixed> $object_descriptor
+     * The model entry to complete by reference.
+     *
+     * @return void
+     * Stores parsed documentation and reports invalid tags at their source lines.
+     *
+     * @author Oleg Schildt
+     */
+    protected function processObjectDocBlock(array &$object_descriptor): void
     {
         $read_name = $this->getNameByType($object_descriptor["type"]);
         $appendix = "\nFile: " . $object_descriptor["source_file"]["full_name"] . ", line: " . $object_descriptor["start_line"];
 
-        if (empty($object_descriptor["docblock"])) {
-            PhpDocWatcher::trackWarning("The $read_name '" . $object_descriptor["name"] . "' has no doc block!" . $appendix);
+        $this->completeDeclaration($object_descriptor);
 
-            $this->resolveObjectTypeNames($object_descriptor);
+        if (empty($object_descriptor['docblock'])) {
+            if ($object_descriptor['type'] !== 'source_file' && empty($object_descriptor['promoted'])) {
+                PhpDocWatcher::trackWarning("The $read_name '" . $object_descriptor['name'] . "' has no doc block!" . $appendix);
+            }
 
             return;
         }
 
-        $docblock = $this->docblock_factory->create($object_descriptor["docblock"]);
+        $statement = $object_descriptor['stmt'] ?? null;
+        $parent_statement = $object_descriptor['parent_stmt'] ?? null;
+        $doc_line = $object_descriptor['doc_line'] ?? $statement?->getDocComment()?->getStartLine()
+            ?? $parent_statement?->getDocComment()?->getStartLine() ?? $object_descriptor['start_line'];
 
+        try {
+            $document = $this->docblock_reader->read($object_descriptor['docblock']);
+        } catch (ParserException|\InvalidArgumentException $exception) {
+            PhpDocWatcher::trackWarning(
+                $object_descriptor['source_file']['full_name'] . ':' . $doc_line . ': ' . $exception->getMessage()
+            );
+
+            return;
+        }
+
+        $docblock = $document['metadata'];
         $object_descriptor["summary"] = trim($docblock->getSummary());
-        $object_descriptor["description"] = trim($docblock->getDescription());
+        $object_descriptor["description"] = trim((string) $docblock->getDescription());
 
         $tags = $docblock->getTags();
 
         foreach ($tags as $tag) {
+            if ($tag instanceof InvalidTag) {
+                PhpDocWatcher::trackWarning('Invalid @' . $tag->getName() . ' tag on ' . $object_descriptor['name'] . $appendix);
+
+                continue;
+            }
+
             switch ($tag->getName()) {
                 case "author":
                     $object_descriptor["authors"][] = [
@@ -1277,11 +1470,9 @@ class PhpDocParser
 
                 case "deprecated":
                     $object_descriptor["deprecated_description"] = trim($tag->getDescription() ?: "");
-                    $object_descriptor["deprecated_version"] = $tag->getVersion();
-
-                    if (!empty($object_descriptor["deprecated_version"])) {
-                        $this->dictionary["deprecated"][$object_descriptor["full_name"]] = &$object_descriptor;
-                    }
+                    $object_descriptor["deprecated_version"] = $tag->getVersion() ?: ($object_descriptor['deprecated_version'] ?? '');
+                    $object_descriptor['deprecated'] = true;
+                    $this->dictionary["deprecated"][$object_descriptor["full_name"]] = &$object_descriptor;
                     break;
 
                 case "ignore":
@@ -1308,16 +1499,6 @@ class PhpDocParser
                     $object_descriptor["version"] = $tag->getVersion();
                     break;
 
-                case "return":
-                    if (!in_array($object_descriptor["type"], ["function", "method"])) {
-                        PhpDocWatcher::trackWarning("The tag @return is inappropriate for the $read_name '" . $object_descriptor["name"] . "'!" . $appendix);
-                        return;
-                    }
-
-                    $object_descriptor["return_description"] = trim($tag->getDescription() ?: "");
-                    $object_descriptor["return_type"] = trim((string)$tag->getType());
-                    break;
-
                 case "since":
                     $object_descriptor["since"][] = [
                         "version" => $tag->getVersion(),
@@ -1325,25 +1506,6 @@ class PhpDocParser
                     ];
 
                     $this->dictionary["since"][$object_descriptor["full_name"]] = &$object_descriptor;
-                    break;
-
-                case "see":
-                    $object_descriptor["see"][] = [
-                        "reference" => $tag->getReference(),
-                        "description" => $tag->getDescription()
-                    ];
-                    break;
-
-                case "throws":
-                    if (!in_array($object_descriptor["type"], ["function", "method"])) {
-                        PhpDocWatcher::trackWarning("The tag @throws is inappropriate for the $read_name '" . $object_descriptor["name"] . "'!" . $appendix);
-                        continue 2;
-                    }
-
-                    $object_descriptor["throws"][] = [
-                        "type" => trim((string)$tag->getType()),
-                        "description" => $tag->getDescription()
-                    ];
                     break;
 
                 case "todo":
@@ -1354,89 +1516,144 @@ class PhpDocParser
                     $this->dictionary["todos"][$object_descriptor["full_name"]] = &$object_descriptor;
                     break;
 
-                case "var":
-                    if (!in_array($object_descriptor["type"], ["global_variable", "constant", "class_constant", "property"])) {
-                        PhpDocWatcher::trackWarning("The tag @var is inappropriate for the $read_name '" . $object_descriptor["name"] . "'!" . $appendix);
-                        continue 2;
-                    }
+            }
+        }
 
-                    $object_descriptor["val_type"] = trim((string)$tag->getType());
+        foreach ($document['references'] as $kind => $references) {
+            if ($kind === 'uses' && $object_descriptor['type'] === 'source_file') {
+                PhpDocWatcher::trackWarning('The tag @uses is inappropriate for a file-level doc block.' . $appendix);
+            } else {
+                $object_descriptor[$kind] = $references;
+            }
+        }
 
-                    $description = trim($tag->getDescription());
-                    if (empty($object_descriptor["description"])) {
-                        $object_descriptor["description"] = $description;
-                    } else {
-                        if (!empty($description)) {
-                            PhpDocWatcher::trackWarning("The description at the tag @var is redundant for the $read_name '" . $object_descriptor["name"] . "', because it has already a description at the docblock!" . $appendix);
-                        }
-                    }
-                    break;
-
-                case "uses":
-                    if (in_array($object_descriptor["type"], ["source_file"])) {
-                        PhpDocWatcher::trackWarning("The tag @uses is inappropriate for the $read_name '" . $object_descriptor["name"] . "'!" . $appendix);
-                        continue 2;
-                    }
-
-                    $object_descriptor["uses"][] = [
-                        "reference" => $tag->getReference(),
-                        "description" => $tag->getDescription()
-                    ];
-                    break;
-
-                case "param":
-                    if (!in_array($object_descriptor["type"], ["function", "method"])) {
-                        PhpDocWatcher::trackWarning("The tag @param is inappropriate for the $read_name '" . $object_descriptor["name"] . "'!" . $appendix);
-                        return;
-                    }
-
-                    $name = $tag->getVariableName();
-                    if (empty($name)) {
-                        PhpDocWatcher::trackWarning("The $read_name '" . $object_descriptor["name"] . "' has a parameter tag without a name!" . $appendix);
-                        continue 2;
-                    }
-
-                    $name = "$" . $tag->getVariableName();
-
-                    if (empty($object_descriptor["params"][$name])) {
-                        PhpDocWatcher::trackWarning("The $read_name '" . $object_descriptor["name"] . "' has no parameter with the name '$name'!" . $appendix);
-                        continue 2;
-                    }
-
-                    if ($object_descriptor["params"][$name]["variadic"] && !$tag->isVariadic()) {
-                        PhpDocWatcher::trackWarning("The parameter '" . $name . "' of the $read_name '" . $object_descriptor["name"] . "' is declared as variadic but documented as non variadic!" . $appendix);
-                    }
-
-                    if (!$object_descriptor["params"][$name]["variadic"] && $tag->isVariadic()) {
-                        PhpDocWatcher::trackWarning("The parameter '" . $name . "' of the $read_name '" . $object_descriptor["name"] . "' is declared as not variadic but documented as variadic!" . $appendix);
-                    }
-
-                    if ($object_descriptor["params"][$name]["by_ref"] && !$tag->isReference()) {
-                        PhpDocWatcher::trackWarning("The parameter '" . $name . "' of the $read_name '" . $object_descriptor["name"] . "' is declared as passed by reference but documented as passed by value!" . $appendix);
-                    }
-
-                    if (!$object_descriptor["params"][$name]["by_ref"] && $tag->isReference()) {
-                        PhpDocWatcher::trackWarning("The parameter '" . $name . "' of the $read_name '" . $object_descriptor["name"] . "' is declared as passed by value but documented as passed by reference!" . $appendix);
-                    }
-
-                    $object_descriptor["params"][$name]["name"] = $name;
-                    $object_descriptor["params"][$name]["val_type"] = trim((string)$tag->getType());
-                    $object_descriptor["params"][$name]["description"] = trim($tag->getDescription());
-                    $object_descriptor["params"][$name]["variadic"] = $tag->isVariadic();
-                    $object_descriptor["params"][$name]["by_ref"] = $tag->isReference();
-
-                    break;
-            } // switch
-        } // foreach
+        if ($object_descriptor['type'] !== 'source_file') {
+            foreach ($document['types'] as $tag) {
+                $this->applyTypeTag($tag, $object_descriptor, $doc_line);
+            }
+        }
 
         $this->checkObjectDocCompleteness($object_descriptor);
 
-        $this->resolveObjectTypeNames($object_descriptor);
+        $this->resolveObjectReferences($object_descriptor);
 
         $this->checkDeadSeeReferences($object_descriptor);
     } // processObjectDocBlock
 
-    protected function checkObjectDocCompleteness(&$object_descriptor)
+    /**
+     * Applies one parsed type annotation to the documented declaration.
+     *
+     * @param PhpDocTagNode $tag
+     * A typed tag or template from the source comment.
+     *
+     * @param array<string, mixed> $descriptor
+     * The declaration receiving the annotation.
+     *
+     * @param int $doc_line
+     * The physical source line at which the doc comment opens.
+     *
+     * @return void
+     * Stores the type and description or logs a diagnostic for an invalid annotation.
+     *
+     * @author Oleg Schildt
+     */
+    protected function applyTypeTag(PhpDocTagNode $tag, array &$descriptor, int $doc_line): void
+    {
+        $value = $tag->value;
+        $line = $doc_line + max(0, (int) $tag->getAttribute(Attribute::START_LINE) - 1);
+        $location = $descriptor['source_file']['full_name'] . ':' . $line;
+        $callable = in_array($descriptor['type'], ['function', 'method'], true);
+
+        if ($value instanceof InvalidTagValueNode) {
+            PhpDocWatcher::trackWarning("$location: Invalid {$tag->name}: " . $value->exception?->getMessage());
+
+            return;
+        }
+
+        if ($value instanceof TemplateTagValueNode) {
+            $descriptor['templates'][$value->name] = $value;
+
+            return;
+        }
+
+        switch ($tag->name) {
+            case '@param':
+                if (!$callable || !isset($descriptor['params'][$value->parameterName])) {
+                    PhpDocWatcher::trackWarning("$location: Unexpected @param {$value->parameterName} for {$descriptor['name']}.");
+
+                    return;
+                }
+
+                if ($value instanceof ParamTagValueNode || $value instanceof TypelessParamTagValueNode) {
+                    $parameter = &$descriptor['params'][$value->parameterName];
+                    $parameter['description'] = trim($value->description);
+                    $parameter['doc_type'] = $value->type ?? null;
+
+                    if (($value->isReference && !$parameter['by_ref']) || ($value->isVariadic && !$parameter['variadic'])) {
+                        PhpDocWatcher::trackWarning("$location: @param {$value->parameterName} disagrees with the PHP signature.");
+                    }
+                }
+
+                break;
+
+            case '@return':
+                if (!$callable) {
+                    PhpDocWatcher::trackWarning("$location: Unexpected @return for {$descriptor['name']}.");
+
+                    return;
+                }
+
+                $descriptor['return_doc_type'] = $value->type;
+                $descriptor['return_description'] = trim($value->description);
+                break;
+
+            case '@throws':
+                if (!$callable) {
+                    PhpDocWatcher::trackWarning("$location: Unexpected @throws for {$descriptor['name']}.");
+
+                    return;
+                }
+
+                $descriptor['throws'][] = ['doc_type' => $value->type, 'description' => trim($value->description)];
+                break;
+
+            case '@var':
+                if (!in_array($descriptor['type'], ['constant', 'class_constant', 'enum_case', 'property', 'global_variable'], true)) {
+                    PhpDocWatcher::trackWarning("$location: Unexpected @var for {$descriptor['name']}.");
+
+                    return;
+                }
+
+                if ($value->variableName !== '' && $value->variableName !== $descriptor['short_name']) {
+                    return;
+                }
+
+                $descriptor['doc_type'] = $value->type;
+
+                if ($value->description !== '') {
+                    if (empty($descriptor['description'])) {
+                        $descriptor['description'] = trim($value->description);
+                    } else {
+                        PhpDocWatcher::trackWarning("$location: Redundant @var description for {$descriptor['name']}.");
+                    }
+                }
+
+                break;
+        }
+    } // applyTypeTag
+
+    /**
+     * Reports missing descriptions or types after PHPDoc and native types are available.
+     *
+     * @param array<string, mixed> $object_descriptor
+     * The declaration to validate.
+     *
+     * @return void
+     * Records completeness diagnostics.
+     *
+     * @author Oleg Schildt
+     */
+    protected function checkObjectDocCompleteness(array &$object_descriptor): void
     {
         $read_name = $this->getNameByType($object_descriptor["type"]);
         $appendix = "\nFile: " . $object_descriptor["source_file"]["full_name"] . ", line: " . $object_descriptor["start_line"];
@@ -1450,7 +1667,7 @@ class PhpDocParser
             case "class_constant":
             case "property":
             case "global_variable":
-                if (empty($object_descriptor["val_type"])) {
+                if (empty($object_descriptor["val_type"]) && empty($object_descriptor["doc_type"])) {
                     PhpDocWatcher::trackWarning("The type of the $read_name '" . $object_descriptor["name"] . "' is not specified!" . $appendix);
                 }
                 break;
@@ -1458,12 +1675,12 @@ class PhpDocParser
             case "method":
             case "function":
                 if (!($object_descriptor["type"] == "method" && ($object_descriptor["short_name"] == "__construct()" || $object_descriptor["short_name"] == "__destruct()")) &&
-                    empty($object_descriptor["return_type"])) {
+                    empty($object_descriptor["return_type"]) && empty($object_descriptor["return_doc_type"])) {
                     PhpDocWatcher::trackWarning("The return type of the $read_name '" . $object_descriptor["name"] . "' is not specified!" . $appendix);
                 }
 
                 foreach ($object_descriptor["params"] as $param) {
-                    if (empty($param["val_type"])) {
+                    if (empty($param["val_type"]) && empty($param["doc_type"])) {
                         PhpDocWatcher::trackWarning("The type of the parameter '" . $param["name"] . "' of the $read_name '" . $object_descriptor["name"] . "' is not specified!" . $appendix);
                     }
 
@@ -1475,55 +1692,66 @@ class PhpDocParser
         } // switch
     } // checkObjectDocCompleteness
 
-    protected function checkDeadSeeReferences(&$object_descriptor)
+    /**
+     * Checks inline see links in the documentation fields of a declaration.
+     *
+     * @param array<string, mixed> $object_descriptor
+     * The documented declaration and its name-resolution scope.
+     *
+     * @return void
+     * Reports each field containing unresolved see references.
+     *
+     * @author Oleg Schildt
+     */
+    protected function checkDeadSeeReferences(array &$object_descriptor): void
     {
         $read_name = $this->getNameByType($object_descriptor["type"]);
         $appendix = "\nFile: " . $object_descriptor["source_file"]["full_name"] . ", line: " . $object_descriptor["start_line"];
 
         if (!empty($object_descriptor["summary"])) {
-            $dead_refs = $this->hasDeadSeeReferences($object_descriptor["source_file"]["uses_map"], checkempty($object_descriptor["summary"]));
+            $dead_refs = $this->hasDeadSeeReferences($object_descriptor, $object_descriptor["summary"]);
             if (!empty($dead_refs)) {
                 PhpDocWatcher::trackWarning("The summary in the docblock of the $read_name '" . $object_descriptor["name"] . "' has references to non-existing objects: " . implode(", ", $dead_refs) . "!" . $appendix);
             }
         }
 
         if (!empty($object_descriptor["description"])) {
-            $dead_refs = $this->hasDeadSeeReferences($object_descriptor["source_file"]["uses_map"], checkempty($object_descriptor["description"]));
+            $dead_refs = $this->hasDeadSeeReferences($object_descriptor, $object_descriptor["description"]);
             if (!empty($dead_refs)) {
                 PhpDocWatcher::trackWarning("The description in the docblock of the $read_name '" . $object_descriptor["name"] . "' has references to non-existing objects: " . implode(", ", $dead_refs) . "!" . $appendix);
             }
         }
 
         if (!empty($object_descriptor["return_description"])) {
-            $dead_refs = $this->hasDeadSeeReferences($object_descriptor["source_file"]["uses_map"], checkempty($object_descriptor["return_description"]));
+            $dead_refs = $this->hasDeadSeeReferences($object_descriptor, $object_descriptor["return_description"]);
             if (!empty($dead_refs)) {
                 PhpDocWatcher::trackWarning("The description of the return value in the docblock of the $read_name '" . $object_descriptor["name"] . "' has references to non-existing objects: " . implode(", ", $dead_refs) . "!" . $appendix);
             }
         }
 
         if (!empty($object_descriptor["copyright"])) {
-            $dead_refs = $this->hasDeadSeeReferences($object_descriptor["source_file"]["uses_map"], checkempty($object_descriptor["copyright"]));
+            $dead_refs = $this->hasDeadSeeReferences($object_descriptor, $object_descriptor["copyright"]);
             if (!empty($dead_refs)) {
                 PhpDocWatcher::trackWarning("The copyright text in the docblock of the $read_name '" . $object_descriptor["name"] . "' has references to non-existing objects: " . implode(", ", $dead_refs) . "!" . $appendix);
             }
         }
 
         if (!empty($object_descriptor["license"])) {
-            $dead_refs = $this->hasDeadSeeReferences($object_descriptor["source_file"]["uses_map"], checkempty($object_descriptor["license"]));
+            $dead_refs = $this->hasDeadSeeReferences($object_descriptor, $object_descriptor["license"]);
             if (!empty($dead_refs)) {
                 PhpDocWatcher::trackWarning("The license text in the docblock of the $read_name '" . $object_descriptor["name"] . "' has references to non-existing objects: " . implode(", ", $dead_refs) . "!" . $appendix);
             }
         }
 
         if (!empty($object_descriptor["deprecated_description"])) {
-            $dead_refs = $this->hasDeadSeeReferences($object_descriptor["source_file"]["uses_map"], checkempty($object_descriptor["deprecated_description"]));
+            $dead_refs = $this->hasDeadSeeReferences($object_descriptor, $object_descriptor["deprecated_description"]);
             if (!empty($dead_refs)) {
                 PhpDocWatcher::trackWarning("The deprectation notice in the docblock of the $read_name '" . $object_descriptor["name"] . "' has references to non-existing objects: " . implode(", ", $dead_refs) . "!" . $appendix);
             }
         }
 
         if (!empty($object_descriptor["version_description"])) {
-            $dead_refs = $this->hasDeadSeeReferences($object_descriptor["source_file"]["uses_map"], checkempty($object_descriptor["version_description"]));
+            $dead_refs = $this->hasDeadSeeReferences($object_descriptor, $object_descriptor["version_description"]);
             if (!empty($dead_refs)) {
                 PhpDocWatcher::trackWarning("The version description in the docblock of the $read_name '" . $object_descriptor["name"] . "' has references to non-existing objects: " . implode(", ", $dead_refs) . "!" . $appendix);
             }
@@ -1535,7 +1763,7 @@ class PhpDocParser
                     continue;
                 }
 
-                $dead_refs = $this->hasDeadSeeReferences($object_descriptor["source_file"]["uses_map"], checkempty($object_data["description"]));
+                $dead_refs = $this->hasDeadSeeReferences($object_descriptor, $object_data["description"]);
                 if (!empty($dead_refs)) {
                     PhpDocWatcher::trackWarning("The description of the tag @see in the docblock of the $read_name '" . $object_descriptor["name"] . "' has references to non-existing objects: " . implode(", ", $dead_refs) . "!" . $appendix);
                 }
@@ -1548,7 +1776,7 @@ class PhpDocParser
                     continue;
                 }
 
-                $dead_refs = $this->hasDeadSeeReferences($object_descriptor["source_file"]["uses_map"], checkempty($object_data["description"]));
+                $dead_refs = $this->hasDeadSeeReferences($object_descriptor, $object_data["description"]);
                 if (!empty($dead_refs)) {
                     PhpDocWatcher::trackWarning("The description of the tag @uses in the docblock of the $read_name '" . $object_descriptor["name"] . "' has references to non-existing objects: " . implode(", ", $dead_refs) . "!" . $appendix);
                 }
@@ -1561,7 +1789,7 @@ class PhpDocParser
                     continue;
                 }
 
-                $dead_refs = $this->hasDeadSeeReferences($object_descriptor["source_file"]["uses_map"], checkempty($object_data["description"]));
+                $dead_refs = $this->hasDeadSeeReferences($object_descriptor, $object_data["description"]);
                 if (!empty($dead_refs)) {
                     PhpDocWatcher::trackWarning("The description of the tag @since in the docblock of the $read_name '" . $object_descriptor["name"] . "' has references to non-existing objects: " . implode(", ", $dead_refs) . "!" . $appendix);
                 }
@@ -1574,7 +1802,7 @@ class PhpDocParser
                     continue;
                 }
 
-                $dead_refs = $this->hasDeadSeeReferences($object_descriptor["source_file"]["uses_map"], checkempty($object_data["description"]));
+                $dead_refs = $this->hasDeadSeeReferences($object_descriptor, $object_data["description"]);
                 if (!empty($dead_refs)) {
                     PhpDocWatcher::trackWarning("The description of the tag @todo in the docblock of the $read_name '" . $object_descriptor["name"] . "' has references to non-existing objects: " . implode(", ", $dead_refs) . "!" . $appendix);
                 }
@@ -1587,7 +1815,7 @@ class PhpDocParser
                     continue;
                 }
 
-                $dead_refs = $this->hasDeadSeeReferences($object_descriptor["source_file"]["uses_map"], checkempty($object_data["description"]));
+                $dead_refs = $this->hasDeadSeeReferences($object_descriptor, $object_data["description"]);
                 if (!empty($dead_refs)) {
                     PhpDocWatcher::trackWarning("The description of the parameter '$object_data[name]' in the docblock of the $read_name '" . $object_descriptor["name"] . "' has references to non-existing objects: " . implode(", ", $dead_refs) . "!" . $appendix);
                 }
@@ -1595,227 +1823,228 @@ class PhpDocParser
         }
     } // checkDeadSeeReferences
 
-    protected function hasDeadSeeReferences(&$uses, $contents)
+    /**
+     * Finds unresolved inline see references in one description.
+     *
+     * @param array<string, mixed> $scope
+     * The declaration that owns the description.
+     *
+     * @param string $contents
+     * The description to scan.
+     *
+     * @return array<string, string>
+     * Returns unresolved names, indexed by their displayed spelling.
+     *
+     * @author Oleg Schildt
+     */
+    protected function hasDeadSeeReferences(array $scope, string $contents): array
     {
         $dead_refs = [];
 
-        $contents = preg_replace_callback("/\{@(see)\s+([^\s\{\}]+)(\s+.*?)?\}/sm", function ($matches) use (&$uses, &$dead_refs) {
-            $full_name = $matches[2];
-            if (!$this->resolveTypeName($uses, $full_name)) {
-                $full_name = trim($full_name, "\\");
-                $dead_refs[$full_name] = $full_name;
-            }
+        preg_match_all('/\{@see\s+([^\s{}]+)/', $contents, $matches);
 
-            return $matches[0];
-        }, $contents);
+        foreach ($matches[1] as $name) {
+            if (!preg_match('~^https?://~i', $name) && $this->references->resolve($name, $scope) === null) {
+                $dead_refs[$name] = $name;
+            }
+        }
 
         return $dead_refs;
     } // hasDeadSeeReferences
 
-    protected function resolveTypeName(&$uses, &$name)
+    /**
+     * Resolves see and uses tags in their lexical scope and records reverse uses links.
+     *
+     * @param array<string, mixed> $descriptor
+     * The declaration containing the references.
+     *
+     * @return void
+     * Stores resolvable targets and reports unknown or ambiguous names.
+     *
+     * @author Oleg Schildt
+     */
+    protected function resolveObjectReferences(array &$descriptor): void
     {
-        $found = false;
+        $location = $descriptor['source_file']['full_name'] . ':' . $descriptor['start_line'];
 
-        if (empty($name)) {
-            $name = "";
-            return $found;
-        }
-
-        $names = explode("|", $name);
-
-        foreach ($names as &$nm) {
-            foreach ($uses as $key => $full_name) {
-                if (trim($key, "\\") == trim($nm, "\\")) {
-                    $nm = $full_name;
-                    $found = true;
-                    break;
-                }
+        foreach (['see', 'uses'] as $kind) {
+            if (empty($descriptor[$kind])) {
+                continue;
             }
 
-            foreach ($this->dictionary["lookup"] as $full_name => &$object_descriptor) {
-                if (preg_match("/.*" . preg_p_escape("\\" . ltrim($nm, "\\")) . "$/", $full_name)) {
-                    $nm = $full_name;
-                    $found = true;
-                    break;
-                }
-            }
-        }
+            foreach ($descriptor[$kind] as &$tag) {
+                $reference = (string) $tag['reference'];
 
-        $name = implode("|", $names);
+                if ($kind === 'see' && preg_match('~^https?://~i', $reference)) {
+                    $tag['reference'] = $reference;
 
-        return $found;
-    } // resolveTypeName
-
-    protected function resolveObjectTypeNames(&$object_descriptor)
-    {
-        $read_name = $this->getNameByType($object_descriptor["type"]);
-        $appendix = "\nFile: " . $object_descriptor["source_file"]["full_name"] . ", line: " . $object_descriptor["start_line"];
-
-        if (!empty($object_descriptor["see"])) {
-            foreach ($object_descriptor["see"] as &$see) {
-                if (!$this->resolveTypeName($object_descriptor["source_file"]["uses_map"], $see["reference"])) {
-                    PhpDocWatcher::trackWarning("The @see tag in the docblock of the $read_name '" . $object_descriptor["name"] . "' refers to non-existing object '$see[reference]'!" . $appendix);
-                }
-            }
-        }
-
-        if (!empty($object_descriptor["uses"])) {
-            foreach ($object_descriptor["uses"] as &$use) {
-                if (!$this->resolveTypeName($object_descriptor["source_file"]["uses_map"], $use["reference"])) {
-                    PhpDocWatcher::trackWarning("The @uses tag in the docblock of the $read_name '" . $object_descriptor["name"] . "' refers to non-existing object '$use[reference]'!" . $appendix);
+                    continue;
                 }
 
-                if (!empty($this->dictionary["lookup"][$use["reference"]])) {
-                    $this->dictionary["lookup"][$use["reference"]]["used-by"][$object_descriptor["full_name"]] = [
-                        "reference" => $object_descriptor["full_name"],
-                        "description" => $use["description"]
+                $target = $this->references->resolve($reference, $descriptor);
+
+                if ($target === null) {
+                    $tag['reference'] = $reference;
+
+                    PhpDocWatcher::trackWarning("$location: @{$kind} on {$descriptor['name']} refers to unknown '$reference'.");
+
+                    continue;
+                }
+
+                $tag['reference'] = $target;
+
+                if ($kind === 'uses') {
+                    $this->dictionary['lookup'][$target]['used-by'][$descriptor['full_name']] = [
+                        'reference' => $descriptor['full_name'],
+                        'description' => $tag['description'],
                     ];
                 }
             }
+
+            unset($tag);
         }
+    } // resolveObjectReferences
 
-        if (!empty($object_descriptor["throws"])) {
-            foreach ($object_descriptor["throws"] as &$throw) {
-                $this->resolveTypeName($object_descriptor["source_file"]["uses_map"], $throw["type"]);
-            }
-        }
-
-        switch ($object_descriptor["type"]) {
-            case "constant":
-            case "class_constant":
-                $this->resolveTypeName($object_descriptor["source_file"]["uses_map"], $object_descriptor["val_type"]);
-
-                $object_descriptor["php_statement"] = "const " . trim($this->getPhpStatement($object_descriptor["stmt"], "", [])) . ";";
-                break;
-
-            case "property":
-                $this->resolveTypeName($object_descriptor["source_file"]["uses_map"], $object_descriptor["val_type"]);
-
-                $php_statement = trim($this->getPhpStatement($object_descriptor["parent_stmt"], $object_descriptor["val_type"], []));
-                $prefix = "";
-                if (preg_match("/^([^\$]*).+/", $php_statement, $matches)) {
-                    $prefix = $matches[1];
-                }
-
-                $object_descriptor["php_statement"] = $prefix . trim($this->getPhpStatement($object_descriptor["stmt"], "", [])) . ";";
-                break;
-
-            case "global_variable":
-                $this->resolveTypeName($object_descriptor["source_file"]["uses_map"], $object_descriptor["val_type"]);
-
-                $object_descriptor["php_statement"] = trim($this->getPhpStatement($object_descriptor["stmt"], "", []));
-                break;
-
-            case "method":
-            case "function":
-                $this->resolveTypeName($object_descriptor["source_file"]["uses_map"], $object_descriptor["return_type"]);
-
-                $param_map = [];
-
-                foreach ($object_descriptor["params"] as &$param) {
-                    $this->resolveTypeName($object_descriptor["source_file"]["uses_map"], $param["val_type"]);
-
-                    if (!empty($param["stmt"]) && !empty($param["stmt"]->default)) {
-                        $orig = $param["stmt"]->default->getAttribute("origNode");
-                        if ($orig) {
-                            $param["default_value"] = $this->getPhpStatement($orig, "", []);
-                        }
-                    }
-
-                    $param_map[$param["name"]] = $param["val_type"];
-                }
-
-                $object_descriptor["php_statement"] = trim($this->getPhpStatement($object_descriptor["stmt"], $object_descriptor["return_type"], $param_map), "{} \n\r;") . ";";
-                break;
-
-            case "class":
-            case "interface":
-                if (!empty($object_descriptor["extends"])) {
-                    foreach ($object_descriptor["extends"] as &$extend) {
-                        $this->resolveTypeName($object_descriptor["source_file"]["uses_map"], $extend);
-
-                        if (!empty($this->dictionary["lookup"][$extend])) {
-                            $this->dictionary["lookup"][$extend]["known_inheritances"][$object_descriptor["full_name"]] = $object_descriptor["full_name"];
-                        }
-                    }
-                }
-
-                if (!empty($object_descriptor["implements"])) {
-                    foreach ($object_descriptor["implements"] as &$implement) {
-                        $this->resolveTypeName($object_descriptor["source_file"]["uses_map"], $implement);
-
-                        if (!empty($this->dictionary["lookup"][$implement])) {
-                            $this->dictionary["lookup"][$implement]["known_implementations"][$object_descriptor["full_name"]] = $object_descriptor["full_name"];
-                        }
-                    }
-                }
-
-                if (!empty($object_descriptor["uses_traits"])) {
-                    foreach ($object_descriptor["uses_traits"] as &$uses_trait) {
-                        $this->resolveTypeName($object_descriptor["source_file"]["uses_map"], $uses_trait);
-
-                        if (!empty($this->dictionary["lookup"][$uses_trait])) {
-                            $this->dictionary["lookup"][$uses_trait]["known_usages"][$object_descriptor["full_name"]] = $object_descriptor["full_name"];
-                        }
-                    }
-                }
-
-                break;
-        }
-    } // resolveObjectTypeNames
-
-    protected function checkOverrides(&$object_descriptor, $short_name, &$target, $type)
+    /**
+     * Prints the native declaration and records PHP attributes and hierarchy relationships.
+     *
+     * @param array<string, mixed> $descriptor
+     * The model entry to complete.
+     *
+     * @return void
+     * Adds a signature and any documented reverse relationships.
+     *
+     * @author Oleg Schildt
+     */
+    protected function completeDeclaration(array &$descriptor): void
     {
-        if (!empty($object_descriptor["extends"])) {
-            foreach ($object_descriptor["extends"] as $extend) {
-                if (empty($this->dictionary["lookup"][$extend])) {
-                    continue;
-                }
+        $statement = $descriptor['parent_stmt'] ?? $descriptor['stmt'] ?? null;
 
-                $full_name = $this->dictionary["lookup"][$extend]["full_name"] . "::" . $short_name;
-
-                if (!empty($this->dictionary["lookup"][$extend][$type][$full_name])) {
-                    $target = $full_name;
-                } else {
-                    $this->checkOverrides($this->dictionary["lookup"][$extend], $short_name, $target, $type);
-                }
-            }
-        } else {
+        if ($statement === null) {
+            return;
         }
 
-        if (!empty($object_descriptor["implements"])) {
-            foreach ($object_descriptor["implements"] as $implement) {
-                if (empty($this->dictionary["lookup"][$implement])) {
-                    continue;
-                }
+        $item = isset($descriptor['parent_stmt']) ? $descriptor['stmt'] : null;
+        $descriptor['php_statement'] = $this->getPhpStatement($statement, $item);
 
-                $full_name = $this->dictionary["lookup"][$implement]["full_name"] . "::" . $short_name;
+        $this->applyDeprecationAttribute($descriptor, $statement);
 
-                if (!empty($this->dictionary["lookup"][$implement][$type][$full_name])) {
-                    $target = $full_name;
-                } else {
-
-                    $this->checkOverrides($this->dictionary["lookup"][$implement], $short_name, $target, $type);
-                }
-            }
-        } else {
+        if (!empty($descriptor['promoted'])) {
+            $constructor = $descriptor['parent']['full_name'] . '::__construct()';
+            $parameter = $descriptor['parent']['methods'][$constructor]['params'][$descriptor['short_name']] ?? [];
+            $descriptor['doc_type'] = $parameter['doc_type'] ?? null;
+            $descriptor['description'] = $parameter['description'] ?? '';
         }
 
-        if (!empty($object_descriptor["uses_traits"])) {
-            foreach ($object_descriptor["uses_traits"] as $uses_trait) {
-                if (empty($this->dictionary["lookup"][$uses_trait])) {
+        foreach (['extends' => 'known_inheritances', 'implements' => 'known_implementations',
+            'uses_traits' => 'known_usages'] as $relation => $reverse) {
+            if (empty($descriptor[$relation])) {
+                continue;
+            }
+
+            foreach ($descriptor[$relation] as &$name) {
+                $target = $this->references->resolve($name, $descriptor, true);
+
+                if ($target !== null) {
+                    $name = $target;
+                    $this->dictionary['lookup'][$target][$reverse][$descriptor['full_name']] = $descriptor['full_name'];
+                }
+            }
+
+            unset($name);
+        }
+    } // completeDeclaration
+
+    /**
+     * Adds native Deprecated attributes to the same log used for PHPDoc deprecations.
+     *
+     * @param array<string, mixed> $descriptor
+     * The documented declaration.
+     *
+     * @param Stmt $statement
+     * The native statement carrying the attributes.
+     *
+     * @return void
+     * Records the attribute and its literal message or version, if present.
+     *
+     * @author Oleg Schildt
+     */
+    protected function applyDeprecationAttribute(array &$descriptor, Stmt $statement): void
+    {
+        foreach ($statement->attrGroups ?? [] as $group) {
+            foreach ($group->attrs as $attribute) {
+                $resolved = $attribute->name->getAttribute('resolvedName', $attribute->name);
+
+                if (strcasecmp($resolved->toString(), 'Deprecated') !== 0) {
                     continue;
                 }
 
-                $full_name = $this->dictionary["lookup"][$uses_trait]["full_name"] . "::" . $short_name;
+                $descriptor['deprecated'] = true;
+                $this->dictionary['deprecated'][$descriptor['full_name']] = &$descriptor;
 
-                if (!empty($this->dictionary["lookup"][$uses_trait][$type][$full_name])) {
-                    $target = $full_name;
-                } else {
-                    $this->checkOverrides($this->dictionary["lookup"][$uses_trait], $short_name, $target, $type);
+                foreach ($attribute->args as $index => $argument) {
+                    $name = $argument->name?->toString() ?? (['message', 'since'][$index] ?? '');
+
+                    if ($argument->value instanceof Node\Scalar\String_) {
+                        if ($name === 'message') {
+                            $descriptor['deprecated_description'] = $argument->value->value;
+                        } elseif ($name === 'since') {
+                            $descriptor['deprecated_version'] = $argument->value->value;
+                        }
+                    }
                 }
             }
-        } else {
+        }
+    } // applyDeprecationAttribute
+
+    /**
+     * Finds the nearest documented declaration of an inherited member.
+     *
+     * @param array<string, mixed> $object_descriptor
+     * The owning class-like declaration.
+     *
+     * @param string $short_name
+     * The member name, including parentheses for a method.
+     *
+     * @param string $target
+     * Receives the inherited member's lookup key when found.
+     *
+     * @param string $type
+     * The member collection, such as methods or properties.
+     *
+     * @return void
+     * Leaves the target empty when there is no documented match.
+     *
+     * @author Oleg Schildt
+     */
+    protected function checkOverrides(array $object_descriptor, string $short_name, string &$target, string $type): void
+    {
+        $owners = array_merge(
+            $object_descriptor['extends'] ?? [],
+            $object_descriptor['implements'] ?? [],
+            $object_descriptor['uses_traits'] ?? []
+        );
+        $visited = [$object_descriptor['full_name'] => true];
+
+        for ($index = 0; isset($owners[$index]); ++$index) {
+            $name = $owners[$index];
+            $owner = $this->dictionary['lookup'][$name] ?? null;
+
+            if ($owner === null || isset($visited[$name])) {
+                continue;
+            }
+
+            $visited[$name] = true;
+            $reference = $this->references->resolve($name . '::' . $short_name, $object_descriptor);
+            $member = $owner[$type][$reference ?? ''] ?? null;
+
+            if ($member !== null && (($member['flags'] ?? 0) & \PhpParser\Modifiers::PRIVATE) === 0) {
+                $target = $reference;
+
+                return;
+            }
+
+            array_push($owners, ...($owner['extends'] ?? []), ...($owner['implements'] ?? []), ...($owner['uses_traits'] ?? []));
         }
     } // checkOverrides
 } // PhpDocParser
