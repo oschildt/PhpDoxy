@@ -27,7 +27,7 @@ composer require "smartfactory/phpdoxy"
     "php": ">=8.5",
     "smartfactory/phpdoxy": ">=2.0.0"
   }
-  
+
   ...
 }
 ```
@@ -41,7 +41,7 @@ composer require "smartfactory/phpdoxy"
 - Ability to include user defined files into the documentation.
 - Useful object lookup, displaying results while typing, and direct jump to the found object (no serverside logic necessary, pure JavaScript solution).
 - Formatted source code files are also included as documentation. Each object has a reference to the source file and the line. The developer does not need to go
-  to the real source files and look for the implementation details, he can directly jump to and study it in the documentation. 
+  to the real source files and look for the implementation details, he can directly jump to and study it in the documentation.
 - Summarizing changes, todos and deprecated notes in a special page *Log*.
 - It can be run from WEB and command line.
 - Customizing look and feel of the documentation through adjusting the template or extending the renderer.
@@ -50,7 +50,7 @@ composer require "smartfactory/phpdoxy"
 
 - @author
 - @copyright
-- @deprecated 
+- @deprecated
 - @ignore
 - @internal
 - @license
@@ -70,14 +70,14 @@ composer require "smartfactory/phpdoxy"
 ### Usage
 
 The configuration for the PhpDoxy has to be placed to the configuration file *phpdoxy_config.xml*. In the case of command line usage, the
-configuration file may have arbitrary name. 
+configuration file may have arbitrary name.
 
 The configuration file should be placed in the working directory of the script. In the case of command line usage, the
-configuration file could be passed as parameter with a valid relative or absolute path.  
+configuration file could be passed as parameter with a valid relative or absolute path.
 
 #### WEB
 
-There is an example script in *examples/generate.php*. 
+There is an example script in *examples/generate.php*.
 
 ```php
 <?php
@@ -105,7 +105,7 @@ require_once "vendor/autoload.php";
 ```
 
 1. Put the script to the directory of your application. Ensure that the including of the *vendor/autoload.php* is valid.
-2. Put the configuration file *phpdoxy_config.xml* to the directory of your application and specify there the source directory 
+2. Put the configuration file *phpdoxy_config.xml* to the directory of your application and specify there the source directory
 with your code to be documented and the target directory for the generated documentation.
 3. Run the *generate.php* from your browser.
 
@@ -131,22 +131,23 @@ The configuration for the documentation generation is setup in the XML file *php
     <title>SmartFactory Library</title>
 
     <sources>
-        <source>test_src</source>
-        <source>examples_src</source>
+        <source>src</source>
+    <source>src_samples</source>
+        <source>instructions</source>
     </sources>
-    <target>test_docs</target>
+        <target>docs</target>
     <template>default</template>
 
     <user_files>
         <user_file title="Directory structure - SmartFactory Library" menu_title="Structure">
-            add_doc\structure.html
+            additional/structure.html
         </user_file>
     </user_files>
 </config>
 ```
 **title**
 
-The name of your project or library. 
+The name of your project or library.
 
 **sources**
 
@@ -186,7 +187,7 @@ This part is optional and should be used if you want to include your own files i
 
 - The title for the contents of your file.
 - The short menu title.
-- The path to the file with the contents. The path can be either absolute or relative. If the path is relative, the PhpDoxy tries to 
+- The path to the file with the contents. The path can be either absolute or relative. If the path is relative, the PhpDoxy tries to
   find the path based from the directory containing the configuration file and from the working directory.
 
 ### Demo
@@ -195,7 +196,7 @@ https://github.com/oschildt/PhpDoxyDemo
 
 1. Git-clone the demo application and run 'composer update'.
 2. Run *generate.php* from your browser or *generate.cmd/generate.sh*.
-3. Study the source code in the directory *src*, *instructions*, *additional* and the resulting documentation in the directory *docs*.
+3. Study the source code in the directory *src*, *src_samples*, *instructions*, *additional* and the resulting documentation in the directory *docs*.
 
 ### Implementation details
 
