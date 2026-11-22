@@ -6,11 +6,20 @@ namespace PhpDoxy;
 \ini_set("output_buffering", "off");
 ob_implicit_flush();
 
-foreach ([__DIR__ . '/../../../autoload.php', __DIR__ . '/../vendor/autoload.php'] as $file) {
-    if (file_exists($file)) {
+$autoloaders = [
+    $GLOBALS['_composer_autoload_path'] ?? '',
+    __DIR__ . '/../vendor/autoload.php',
+    __DIR__ . '/../../../autoload.php',
+];
+
+foreach ($autoloaders as $file) {
+    if (is_file($file)) {
         require $file;
-        break;
+
+        exit(generate($argv));
     }
 }
 
-generate($argv);
+fwrite(STDERR, "PhpDoxy's Composer autoloader could not be found.\n");
+
+exit(1);

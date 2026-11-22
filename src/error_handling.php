@@ -1,14 +1,6 @@
 <?php
 
-use PhpDoxy\PhpDocWatcher;
-
-set_error_handler(function ($errno, $errstr, $errfile, $errline) {
-    $dtrace = debug_backtrace();
-
-    PhpDocWatcher::trackError(format_backtrace($dtrace));
-});
-
-function format_backtrace(&$info)
+function format_backtrace(array &$info): string
 {
     if (!isset($info) || count($info) == 0) {
         return "backtrace empty";
@@ -26,6 +18,7 @@ function format_backtrace(&$info)
                 "line: " . $info_entry["args"][3] . "\r\n" .
                 $info_entry["args"][1] . "\r\n";
 
+            // we do not need this
             if (false && !empty($info_entry["args"][4])) {
                 $trace .= "\r\nLocal variables:\r\n\r\n";
 
@@ -48,15 +41,15 @@ function format_backtrace(&$info)
         }
 
         $args = (isset($info_entry["args"])) ? $info_entry["args"] : array();
-        $trace .= val_or_empty($info_entry["file"]) . "\r\n" .
-            "line: " . val_or_empty($info_entry["line"]) . "\r\n" .
+        $trace .= ($info_entry["file"] ?? "") . "\r\n" .
+            "line: " . ($info_entry["line"] ?? "") . "\r\n" .
             $info_entry["function"] . "(" . make_arg_list($args) . ")";
     }
 
     return $trace;
 } // format_backtrace
 
-function deep_implode(&$arr)
+function deep_implode(array &$arr): string
 {
     $list = "";
 
@@ -73,9 +66,10 @@ function deep_implode(&$arr)
     return "[" . trim($list, ", ") . "]";
 } // deep_implode
 
-function make_arg_list(&$args)
+function make_arg_list(array &$args): string
 {
-    return;
+    // we do not need this
+    return "";
 
     $list = "";
 
@@ -92,12 +86,7 @@ function make_arg_list(&$args)
     return trim($list, ", ");
 } // make_arg_list
 
-function val_or_empty(&$param)
-{
-    return isset($param) ? $param : "";
-}
-
-function extract_call_stack($btrace)
+function extract_call_stack(array $btrace): string
 {
     if (empty($btrace) || !is_array($btrace)) {
         return "";
@@ -111,7 +100,7 @@ function extract_call_stack($btrace)
 
         if (!empty($btrace_entry["function"]) &&
             ($btrace_entry["function"] == "handle_error" ||
-                strpos($btrace_entry["function"], "{closure}") !== false ||
+                str_contains($btrace_entry["function"], "{closure}") ||
                 $btrace_entry["function"] == "handleError" ||
                 $btrace_entry["function"] == "trigger_error"
             )

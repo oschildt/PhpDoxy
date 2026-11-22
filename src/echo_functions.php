@@ -2,12 +2,12 @@
 
 namespace PhpDoxy;
 
-function echo_standard($message): void
+function echo_standard(string $message): void
 {
     echo $message;
 } // echo_standard
 
-function echo_highlighted($message): void
+function echo_highlighted(string $message): void
 {
     if (php_sapi_name() == "cli") {
         echo "\033[95m";
@@ -24,7 +24,7 @@ function echo_highlighted($message): void
     }
 } // echo_highlighted
 
-function echo_highlighted2($message): void
+function echo_highlighted2(string $message): void
 {
     if (php_sapi_name() == "cli") {
         echo "\033[96m";
@@ -41,7 +41,7 @@ function echo_highlighted2($message): void
     }
 } // echo_highlighted2
 
-function echo_success($message): void
+function echo_success(string $message): void
 {
     if (php_sapi_name() == "cli") {
         echo "\033[92m";
@@ -58,7 +58,7 @@ function echo_success($message): void
     }
 } // echo_success
 
-function echo_warning($message): void
+function echo_warning(string $message): void
 {
     if (php_sapi_name() == "cli") {
         echo "\033[93m";
@@ -75,7 +75,7 @@ function echo_warning($message): void
     }
 } // echo_warning
 
-function echo_error($message): void
+function echo_error(string $message): void
 {
     if (php_sapi_name() == "cli") {
         echo "\033[91m";

@@ -1,6 +1,7 @@
 <h1>{header_title}</h1>
 
 <div class="definition">{definition}</div>
+{type_parameters}
 
 <!-- if description -->
 <div class="short-description">
@@ -25,7 +26,8 @@
 <!-- if parameters -->
 <h2>Parameters</h2>
 
-  <table class="table table-responsive table-bordered table-striped param_multicolumn">
+<div class="parameter-table">
+  <table class="table table-bordered table-striped param_multicolumn">
       <tr>
       <th>Name</th>
       <th>Pass type</th>
@@ -55,6 +57,7 @@
       <!-- endforeach parameters -->
       
   </table>
+</div>
 <!-- endif parameters -->
 
 <!-- if return_type -->
@@ -132,7 +135,7 @@
 <h2>Links</h2>
 <div class="item_list">
 <!-- foreach links -->
-<a href="{url}" target="_blank">{url}</a><br>
+{tag_link}<br>
 <!-- if description -->
 <div class="item_description">{description}</div>
 <!-- endif description -->
@@ -186,15 +189,17 @@
 </div>
 <!-- endif since -->
 
-<!-- if deprecated_version -->
+<!-- if deprecated -->
 <h2>Deprecated</h2>
 <div class="item_list">
+<!-- if deprecated_version -->
 {deprecated_version}<br>
+<!-- endif deprecated_version -->
 <!-- if deprecated_description -->
 <div class="item_description">{deprecated_description}</div>
 <!-- endif deprecated_description -->
 </div>
-<!-- endif deprecated_version -->
+<!-- endif deprecated -->
 
 <!-- if todos -->
 <h2>Todo</h2>

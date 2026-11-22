@@ -2,13 +2,16 @@
 <config>
     <title>SmartFactory Library</title>
 
-    <source>test_src</source>
-    <target>test_docs</target>
+    <sources>
+        <source>src</source>
+    <source>instructions</source>
+    </sources>
+        <target>docs</target>
     <template>default</template>
 
     <user_files>
         <user_file title="Directory structure - SmartFactory Library" menu_title="Structure">
-            add_doc\structure.html
+            additional/structure.html
         </user_file>
     </user_files>
 </config>

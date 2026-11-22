@@ -29,13 +29,16 @@
   },
   "require": {
     "php": ">=8.4",
-    "nikic/php-parser": "*",
-    "smartfactory/fshl": "*",
-    "phpdocumentor/reflection-docblock": "*",
-    "erusev/parsedown": "dev-master",
-    "erusev/parsedown-extra": "dev-master"
+    "ext-dom": "*",
+    "ext-mbstring": "*",
+    "ext-tokenizer": "*",
+    "nikic/php-parser": "^5.9",
+    "phpstan/phpdoc-parser": "^2.4",
+    "phpdocumentor/reflection-docblock": "^6.0",
+    "erusev/parsedown": "^1.8",
+    "erusev/parsedown-extra": "^0.9"
   },
-
-  "minimum-stability": "dev",
-  "prefer-stable": true
+  "scripts": {
+    "test": "@php tests/integration.php"
+  }
 }
