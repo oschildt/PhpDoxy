@@ -435,7 +435,9 @@ p {
 code {
     background: none;
     color: inherit;
+    font-size: 14px;
 }
+
 code.keyword {
     color: #c7254e;
 }
@@ -469,21 +471,21 @@ code.keyword {
 .multicolumn tr td:first-child
 {
   width: 27%;
-  word-wrap: break-word; 
+  word-wrap: break-word;
   word-break: break-all;
 }
 
 .multicolumn tr td:nth-child(2)
 {
   width: 27%;
-  word-wrap: break-word; 
+  word-wrap: break-word;
   word-break: break-all;
 }
 
 .class_multicolumn tr td:first-child
 {
   width: 35%;
-  word-wrap: break-word; 
+  word-wrap: break-word;
   word-break: break-all;
 }
 
@@ -542,7 +544,7 @@ code.keyword {
 
 .type_label
 {
-  color: #333333; 
+  color: #333333;
   font-weight: bold;
 }
 

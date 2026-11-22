@@ -4,7 +4,8 @@
 
     <sources>
         <source>src</source>
-    <source>instructions</source>
+    <source>src_samples</source>
+        <source>instructions</source>
     </sources>
         <target>docs</target>
     <template>default</template>

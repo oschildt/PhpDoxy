@@ -13,11 +13,11 @@ namespace SmartFactory;
  * Stores each caller's JSON history behind an expiring, owner-checked Redis lock.
  *
  * Requires the optional phpredis extension and a configured Redis connection. Lua guards
- * reads, writes and lock release so an expired owner cannot overwrite another admission [Redis throttling guide](markdown:RedisRequestThrottlingManager.md).
+ * reads, writes and lock release so an expired owner cannot overwrite another admission.
  * Uses the Redis server clock and expires inactive history after its longest retained window.
  * The client remains owned by the application and is never reconfigured or disconnected.
  *
- * @link markdown:RedisRequestThrottlingManager.md Instruction
+ * @link markdown:RedisRequestThrottlingManager.md Important notes
  *
  * @author Oleg Schildt
  */

@@ -153,7 +153,7 @@ The name of your project or library.
 Use one or more `<source>` elements inside `<sources>`. Relative paths are resolved against the configuration directory, then the working directory.
 PhpDoxy scans the directories recursively in the listed order and builds a single site. Source pages are labeled by directory when more than one directory is configured.
 When separate source directories declare the same symbol, the first declaration supplies the API page and PhpDoxy reports a warning. The source pages are generated for both files.
-Markdown files in the source directories become standalone pages titled after their filename. They share the site's styling, including PHP syntax highlighting, and are accessible by direct links. Relative links between discovered Markdown files are converted to the generated page URLs.
+Markdown files in the source directories become standalone pages. A leading `#`, `##`, or `###` heading supplies the browser title. When the document has no such heading, the browser title uses the filename. The page body shows the Markdown content with the site's styling, including PHP syntax highlighting. Relative links between discovered Markdown files are converted to the generated page URLs.
 
 Links in Markdown pages and PHPDoc descriptions open in a new tab. Use the source filename to link to a generated Markdown page.
 

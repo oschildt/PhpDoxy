@@ -113,6 +113,8 @@ class ShardManager implements IShardManager
      * @throws \Exception
      * If the name is empty or already registered.
      *
+     * @link markdown:ShardManager.md Shard selection and stateless client affinity
+     *
      * @see ShardManager::dbshard()
      * @see ShardManager::randomDBShard()
      *

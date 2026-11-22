@@ -1715,7 +1715,7 @@ abstract class DBWorker implements IInitable
      * A supplied integer identity is preserved on INSERT. Otherwise its generated value replaces
      * the corresponding array dimension, or is stored in the leaf when it is not a dimension.
      * Every record must supply at least one configured field other than the identity column.
-     * Known keys are serialized through dbworker_locks until the transaction ends. The method owns
+     * Known keys are serialized through dbworker_locks (see: [Concurrent record saving](markdown:SavingRecords.md)) until the transaction ends. The method owns
      * a transaction when none is active; otherwise the caller retains commit and rollback control.
      * On failure the supplied array is unchanged and a caller transaction must be rolled back.
      *
@@ -1740,6 +1740,8 @@ abstract class DBWorker implements IInitable
      * a record has no configured fields to write after excluding the identity column,
      * a database operation fails, an INSERT returns no configured identity, or reindexing would
      * overwrite an existing record. A connection must already be open.
+     *
+     * @link markdown:SavingRecords.md Concurrent record saving
      *
      * @author Oleg Schildt
      */

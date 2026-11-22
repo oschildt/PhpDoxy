@@ -21,6 +21,8 @@ use SmartFactory\DatabaseWorkers\DBWorkerException;
  * Each admission owns a READ COMMITTED transaction so application rollbacks cannot refund requests.
  * Connected clones preserve the caller's prepared statement while sharing its native connection.
  *
+ * @link markdown:DBRequestThrottlingManager.md Important notes
+ *
  * @author Oleg Schildt
  */
 class DBRequestThrottlingManager extends AbstractRequestThrottlingManager

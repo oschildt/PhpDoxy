@@ -106,20 +106,17 @@ final class DocTypeRenderer
     } // render
 
     /**
-     * Formats a type or one of its components while preserving its grouping and punctuation.
+     * Formats a type while keeping unions and intersections inline when none of their members span lines.
      *
      * @param Node $node
      * A PHPDoc syntax node with link placeholders already assigned.
-     *
-     * @param bool $compact
-     * Whether to keep a group on one line when its alternatives fit on single lines.
      *
      * @return string
      * Returns the formatted expression before HTML escaping.
      *
      * @author Oleg Schildt
      */
-    private function format(Node $node, bool $compact = false): string
+    private function format(Node $node): string
     {
         if ($node instanceof Type\ArrayShapeNode || $node instanceof Type\ObjectShapeNode) {
             $items = array_map($this->format(...), $node->items);
@@ -135,23 +132,20 @@ final class DocTypeRenderer
         if ($node instanceof Type\ArrayShapeItemNode || $node instanceof Type\ObjectShapeItemNode) {
             $key = $node->keyName === null ? '' : $node->keyName . ($node->optional ? '?: ' : ': ');
 
-            return $key . $this->format($node->valueType, compact: true);
+            return $key . $this->format($node->valueType);
         }
 
         if ($node instanceof Type\UnionTypeNode || $node instanceof Type\IntersectionTypeNode) {
             $operator = $node instanceof Type\UnionTypeNode ? '| ' : '& ';
-            $members = array_map(function (TypeNode $type) use ($compact): string {
-                $formatted = $this->format($type, $compact);
+            $members = array_map(function (TypeNode $type): string {
+                $formatted = $this->format($type);
 
                 return $type instanceof Type\NullableTypeNode ? '(' . $formatted . ')' : $formatted;
             }, $node->types);
+            $inline = implode(' ' . $operator, $members);
 
-            if ($compact) {
-                $inline = implode(' ' . $operator, $members);
-
-                if (!str_contains($inline, "\n")) {
-                    return '(' . $inline . ')';
-                }
+            if (!str_contains($inline, "\n")) {
+                return '(' . $inline . ')';
             }
 
             return "(\n" . $this->indent(implode("\n" . $operator, $members)) . "\n)";
@@ -163,9 +157,9 @@ final class DocTypeRenderer
             foreach ($node->genericTypes as $index => $type) {
                 $variance = $node->variances[$index] ?? Type\GenericTypeNode::VARIANCE_INVARIANT;
                 $arguments[] = match ($variance) {
-                    Type\GenericTypeNode::VARIANCE_INVARIANT => $this->format($type, compact: true),
+                    Type\GenericTypeNode::VARIANCE_INVARIANT => $this->format($type),
                     Type\GenericTypeNode::VARIANCE_BIVARIANT => '*',
-                    default => $variance . ' ' . $this->format($type, compact: true),
+                    default => $variance . ' ' . $this->format($type),
                 };
             }
 
@@ -181,7 +175,7 @@ final class DocTypeRenderer
         if ($node instanceof Type\CallableTypeNode) {
             $templates = array_map($this->format(...), $node->templateTypes);
             $parameters = array_map($this->format(...), $node->parameters);
-            $returnType = $this->format($node->returnType, compact: true);
+            $returnType = $this->format($node->returnType);
 
             if ($node->returnType instanceof Type\CallableTypeNode) {
                 $returnType = '(' . $returnType . ')';
@@ -196,7 +190,7 @@ final class DocTypeRenderer
         if ($node instanceof Type\CallableTypeParameterNode) {
             $markers = ($node->isReference ? '&' : '') . ($node->isVariadic ? '...' : '') . $node->parameterName;
 
-            return rtrim($this->format($node->type, compact: true) . ' ' . $markers) . ($node->isOptional ? '=' : '');
+            return rtrim($this->format($node->type) . ' ' . $markers) . ($node->isOptional ? '=' : '');
         }
 
         if ($node instanceof TemplateTagValueNode) {

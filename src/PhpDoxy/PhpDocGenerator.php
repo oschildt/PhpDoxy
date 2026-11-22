@@ -1054,10 +1054,10 @@ class PhpDocGenerator
     } // generateUserFiles
 
     /**
-     * Publishes Markdown files as standalone pages using the user-content template.
+     * Publishes Markdown pages with their original headings and a browser title from the opening heading or filename.
      *
      * @throws \RuntimeException
-     * If a Markdown document or template cannot be read, or a page cannot be written.
+     * If a Markdown document or the site layout cannot be read, or a page cannot be written.
      *
      * @author Oleg Schildt
      */
@@ -1078,23 +1078,29 @@ class PhpDocGenerator
                 throw new \RuntimeException("Cannot read Markdown file '$relative'.");
             }
 
-            $title = substr(basename($relative), 0, -3);
-            $body = $this->renderMarkdown($text, directory: dirname($file));
+            if (str_starts_with($text, "\xEF\xBB\xBF")) {
+                $text = substr($text, 3);
+            }
 
-            // The page template supplies the title when the document starts with the same heading.
-            if (preg_match('~\A<h1>(.*?)</h1>\s*~s', $body, $heading)
-                && html_entity_decode(strip_tags($heading[1]), ENT_QUOTES, 'UTF-8') === $title
+            $body = $this->renderMarkdown($text, directory: dirname($file));
+            $title = '';
+
+            if (preg_match('~\A\s*#~', $text)
+                && preg_match('~\A<h([1-3])\b[^>]*>(.*?)</h\1>~s', $body, $heading)
             ) {
-                $body = substr($body, strlen($heading[0]));
+                $title = trim(html_entity_decode(strip_tags($heading[2]), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+            }
+
+            if ($title === '') {
+                $title = substr(basename($relative), 0, -3);
             }
 
             $replacements = [
                 '{title}' => htmlspecialchars($title) . ' - ' . htmlspecialchars($this->config['title']),
-                '{header_title}' => htmlspecialchars($title),
+                '{header_title}' => '',
             ];
-            $contents = $this->getPageTemplate('user_content.tpl', $replacements + [
-                '{contents}' => '<div class="markdown-content">' . $body . '</div>',
-            ]);
+            $contents = '<div class="markdown-content">' . $body . '</div>';
+
             $this->createFile($this->markdown_pages[$this->markdownPathKey($file)], $contents, $replacements);
         }
     } // generateMarkdownFiles

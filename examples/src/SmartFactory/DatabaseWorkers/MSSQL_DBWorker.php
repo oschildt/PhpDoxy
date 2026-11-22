@@ -23,6 +23,8 @@ namespace SmartFactory\DatabaseWorkers;
  *
  * @see DBWorker
  *
+ * @link markdown:MSSQLNotes.md Important notes
+ *
  * @author Oleg Schildt
  */
 class MSSQL_DBWorker extends DBWorker
