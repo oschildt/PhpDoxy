@@ -1,13 +1,14 @@
-<?xml version="1.0" encoding="UTF-8" ?>
+<?xml version="1.0" encoding="UTF-8"?>
 <config>
     <title>SmartFactory Library</title>
 
     <sources>
         <source>src</source>
-    <source>src_samples</source>
+        <source>src_samples</source>
         <source>instructions</source>
     </sources>
-        <target>docs</target>
+
+    <target>docs</target>
     <template>default</template>
 
     <user_files>

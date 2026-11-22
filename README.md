@@ -126,16 +126,17 @@ The command returns status 0 when generation completes, including when it report
 The configuration for the documentation generation is setup in the XML file *phpdoxy_config.xml*.
 
 ```xml
-<?xml version="1.0" encoding="UTF-8" ?>
+<?xml version="1.0" encoding="UTF-8"?>
 <config>
     <title>SmartFactory Library</title>
 
     <sources>
         <source>src</source>
-    <source>src_samples</source>
+        <source>src_samples</source>
         <source>instructions</source>
     </sources>
-        <target>docs</target>
+
+    <target>docs</target>
     <template>default</template>
 
     <user_files>
