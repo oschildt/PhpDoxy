@@ -22,6 +22,7 @@ const
      * Identifies an error encountered while parsing input.
      *
      * @var string
+     * Some details.
      *
      * @author Oleg Schildt
      */
@@ -31,6 +32,7 @@ const
      * Identifies an error in the content being processed.
      *
      * @var string
+     * Some details.
      *
      * @author Oleg Schildt
      */
@@ -40,6 +42,7 @@ const
      * Identifies an operating system error.
      *
      * @var string
+     * Some details.
      *
      * @author Oleg Schildt
      */
@@ -47,9 +50,10 @@ const
 ;
 
 /**
- * Identifies a system-level error.
+ * Identifies a system error.
  *
  * @var string
+ * Some details.
  *
  * @author Oleg Schildt
  */
@@ -59,6 +63,7 @@ const ERR_SYSTEM = "system_error";
  * Identifies a user error.
  *
  * @var string
+ * Some details.
  *
  * @author Oleg Schildt
  */

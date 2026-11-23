@@ -677,22 +677,26 @@ class PhpDocGenerator
      * The page template to update by reference.
      *
      * @return void
-     * Skips ignored constants and includes the namespace link where available. Clears the index section when the list is empty.
+     * Renders the summary or, when it is absent, the description for each visible constant.
+     * Includes the namespace link where available and clears the index section when the list is empty.
      *
      * @author Oleg Schildt
      */
     protected function renderConstantList(array &$object_list, string &$contents): void
     {
         $constant_array = [];
+
         foreach ($object_list as &$object_descriptor) {
             if (!empty($object_descriptor["ignore"])) {
                 continue;
             }
 
+            $summary = $object_descriptor["summary"] ?? "";
+            $description = $summary === "" ? ($object_descriptor["description"] ?? "") : $summary;
             $row = [
                 "constant_name" => htmlspecialchars($object_descriptor["name"]),
                 "constant_link" => $this->getHelpFile($object_descriptor),
-                "constant_description" => $this->formatText($object_descriptor, $object_descriptor["summary"] ?? "")
+                "constant_description" => $this->formatText($object_descriptor, $description)
             ];
 
             if (empty($object_descriptor["namespace"]["name"])) {
@@ -727,22 +731,26 @@ class PhpDocGenerator
      * The page template to update by reference.
      *
      * @return void
-     * Skips global variables marked as ignored. Clears the index section when the list is empty.
+     * Renders the summary or, when it is absent, the description for each visible global variable.
+     * Clears the index section when the list is empty.
      *
      * @author Oleg Schildt
      */
     protected function renderGlobalVariableList(array &$object_list, string &$contents): void
     {
         $glovar_array = [];
+
         foreach ($object_list as &$object_descriptor) {
             if (!empty($object_descriptor["ignore"])) {
                 continue;
             }
 
+            $summary = $object_descriptor["summary"] ?? "";
+            $description = $summary === "" ? ($object_descriptor["description"] ?? "") : $summary;
             $glovar_array[] = [
                 "global_name" => htmlspecialchars($object_descriptor["name"]),
                 "global_link" => $this->getHelpFile($object_descriptor),
-                "global_description" => $this->formatText($object_descriptor, $object_descriptor["summary"] ?? "")
+                "global_description" => $this->formatText($object_descriptor, $description)
             ];
         }
 
