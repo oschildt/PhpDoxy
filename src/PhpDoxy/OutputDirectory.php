@@ -12,6 +12,13 @@ use RuntimeException;
  */
 final class OutputDirectory
 {
+    /**
+     * Output directory path built from the resolved parent directory and validated directory name.
+     *
+     * @var string
+     *
+     * @author Oleg Schildt
+     */
     private string $target;
 
     /**
@@ -35,7 +42,8 @@ final class OutputDirectory
         $name = basename($raw_target);
         $parent = realpath(dirname($raw_target));
 
-        if ($parent === false || !is_dir($parent) || in_array($name, ['', '.', '..'], true)
+        if (
+            $parent === false || !is_dir($parent) || in_array($name, ['', '.', '..'], true)
             || (DIRECTORY_SEPARATOR === '\\' && (strpbrk($name, ':<>|?*"') !== false || rtrim($name, ' .') !== $name))
         ) {
             throw new RuntimeException('The target must have a name and an existing parent directory.');
@@ -304,3 +312,4 @@ final class OutputDirectory
         }
     } // removeTree
 } // OutputDirectory
+

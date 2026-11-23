@@ -42,8 +42,8 @@ final class PhpHighlighter
             $class = $this->tokenClass($token, $tokens[$index - 1] ?? null, $tokens[$index + 1] ?? null);
             $parts = explode("\n", $text);
 
-            foreach ($parts as $index => $part) {
-                if ($index > 0) {
+            foreach ($parts as $index2 => $part) {
+                if ($index2 > 0) {
                     $html .= $lineNumbers ? "</span>\n" . $this->lineStart(++$line) : "\n";
                 }
 
@@ -103,19 +103,34 @@ final class PhpHighlighter
             T_UNSET_CAST => 'php-keyword2',
             T_PUBLIC_SET, T_PROTECTED_SET, T_PRIVATE_SET => 'php-keyword1',
             default => match (true) {
-                $token->getTokenName() === 'T_VOID_CAST', $token->text === '|>' => 'php-keyword2',
-                // PHP 8.4 splits a pipe operator into adjacent punctuation tokens.
-                $token->id === ord('|') && $next?->id === ord('>'),
-                $token->id === ord('>') && $previous?->id === ord('|') => 'php-keyword2',
-                $token->id === T_STRING => in_array(
-                    strtolower($token->text),
-                    ['true', 'false', 'null', 'int', 'float', 'string', 'bool', 'object', 'iterable', 'mixed', 'void',
-                        'never', 'self', 'parent'],
-                    true
-                ) ? 'php-keyword1' : '',
-                $token->id >= 256 && preg_match('/^[a-z_][a-z_0-9]*$/iD', $token->text) => 'php-keyword1',
-                default => '',
-            },
+                    $token->getTokenName() === 'T_VOID_CAST', $token->text === '|>' => 'php-keyword2',
+                    // PHP 8.4 splits a pipe operator into adjacent punctuation tokens.
+                    $token->id === ord('|') && $next?->id === ord('>'),
+                    $token->id === ord('>') && $previous?->id === ord('|') => 'php-keyword2',
+                    $token->id === T_STRING => in_array(
+                        strtolower($token->text),
+                        [
+                            'true',
+                            'false',
+                            'null',
+                            'int',
+                            'float',
+                            'string',
+                            'bool',
+                            'object',
+                            'iterable',
+                            'mixed',
+                            'void',
+                            'never',
+                            'self',
+                            'parent'
+                        ],
+                        true
+                    ) ? 'php-keyword1' : '',
+                    $token->id >= 256 && preg_match('/^[a-z_][a-z_0-9]*$/iD', $token->text) => 'php-keyword1',
+                    default => '',
+                },
         };
     } // tokenClass
 } // PhpHighlighter
+

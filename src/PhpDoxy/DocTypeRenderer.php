@@ -21,7 +21,22 @@ use PHPStan\PhpDocParser\ParserConfig;
  */
 final class DocTypeRenderer
 {
+    /**
+     * Lexer used to tokenize native type expressions before rendering.
+     *
+     * @var Lexer
+     *
+     * @author Oleg Schildt
+     */
     private Lexer $lexer;
+
+    /**
+     * Parser that turns native type expressions into a syntax tree for rendering.
+     *
+     * @var TypeParser
+     *
+     * @author Oleg Schildt
+     */
     private TypeParser $parser;
 
     /**
@@ -208,7 +223,8 @@ final class DocTypeRenderer
         if ($node instanceof Type\ArrayTypeNode || $node instanceof Type\OffsetAccessTypeNode) {
             $base = $this->format($node->type);
 
-            if ($node->type instanceof Type\CallableTypeNode || $node->type instanceof Type\NullableTypeNode
+            if (
+                $node->type instanceof Type\CallableTypeNode || $node->type instanceof Type\NullableTypeNode
                 || ($node instanceof Type\ArrayTypeNode && $node->type instanceof Type\ConstTypeNode)
             ) {
                 $base = '(' . $base . ')';
@@ -330,3 +346,4 @@ final class DocTypeRenderer
         return $copy;
     } // copyWithLinks
 } // DocTypeRenderer
+

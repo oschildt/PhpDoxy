@@ -6,7 +6,8 @@ namespace PhpDoxy;
  * Loads the XML configuration and generates a documentation site.
  *
  * @param list<string> $argv
- * CLI arguments, with the optional configuration path at index 1.
+ * CLI arguments, with an optional configuration path at index 1.
+ * Defaults to `phpdoxy_config.xml` when no path is supplied.
  *
  * @return int
  * Returns 0 for a completed generation, including warnings, or 1 if generation fails.
@@ -87,11 +88,13 @@ function generate(array $argv): int
  * @param string $working_dir
  * The fallback directory for relative paths.
  *
- * @return array<string, mixed>
- * Returns the ordered list of source directories, target, template, title, and optional user-file settings.
+ * @return array{sources: non-empty-list<string>, target: string, template: string, title: string, user_files?: list<array{path: string, title: string, menu_title: string}>}
+ * Returns the resolved source directories in configuration order, the absolute target and template paths,
+ * the site title, and any user files with their resolved paths and titles.
  *
  * @throws \RuntimeException
- * If the XML is invalid, a required setting is empty, or an input path cannot be resolved.
+ * If the XML cannot be loaded, the source list uses an obsolete format, a required setting is missing,
+ * the target has no site directory name, or a required path cannot be resolved.
  *
  * @author Oleg Schildt
  */
@@ -138,6 +141,10 @@ function read_config(string $file, string $working_dir): array
     ];
 
     foreach ($xpath->query('/config/user_files/user_file') as $node) {
+        if (!$node instanceof \DOMElement) {
+            continue;
+        }
+
         $path = resolve_config_path(trim($node->textContent), $directories);
         $title = trim($node->getAttribute('title')) ?: basename($path);
         $menu_title = trim($node->getAttribute('menu_title')) ?: $title;
@@ -170,7 +177,7 @@ function read_config(string $file, string $working_dir): array
 function resolve_config_path(string $path, array $directories, bool $directory = false): string
 {
     $absolute = str_starts_with($path, '/') || str_starts_with($path, '\\') || preg_match('/^[a-z]:/i', $path);
-    $candidates = $absolute ? [$path] : array_map(static fn (string $base): string => $base . DIRECTORY_SEPARATOR . $path, $directories);
+    $candidates = $absolute ? [$path] : array_map(static fn(string $base): string => $base . DIRECTORY_SEPARATOR . $path, $directories);
 
     foreach ($candidates as $candidate) {
         $resolved = $path === '' ? false : realpath($candidate);
@@ -182,3 +189,4 @@ function resolve_config_path(string $path, array $directories, bool $directory =
 
     throw new \RuntimeException("Cannot resolve " . ($directory ? 'directory ' : 'file ') . "'$path'.");
 } // resolve_config_path
+

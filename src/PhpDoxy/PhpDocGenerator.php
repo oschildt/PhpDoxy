@@ -11,18 +11,121 @@ use PHPStan\PhpDocParser\Ast\Type\TypeNode;
  */
 class PhpDocGenerator
 {
+    /**
+     * Parsed documentation model kept by reference, including declaration indexes, source files, and activity entries.
+     *
+     * @var array<string, array<array-key, mixed>>
+     *
+     * @author Oleg Schildt
+     */
     protected array $dictionary;
+
+    /**
+     * Site settings kept by reference for the active generation run.
+     *
+     * @var array{sources: non-empty-list<string>, target: string, template: string, title: string, user_files?: list<array{path: string, title: string, menu_title: string}>, ...}
+     *
+     * @author Oleg Schildt
+     */
     protected array $config;
+
+    /**
+     * Staging directory where the site is written, including a trailing directory separator.
+     *
+     * @var string
+     *
+     * @author Oleg Schildt
+     */
     protected string $target_dir;
+
+    /**
+     * Configured template directory, including a trailing directory separator.
+     *
+     * @var string
+     *
+     * @author Oleg Schildt
+     */
     protected string $template_dir;
+
+    /**
+     * Generation timestamp in the Y-m-d H:i format used in page templates.
+     *
+     * @var string
+     *
+     * @author Oleg Schildt
+     */
     protected string $gen_date;
+
+    /**
+     * Renderer for syntax-highlighted PHP source and code fragments.
+     *
+     * @var PhpHighlighter
+     *
+     * @author Oleg Schildt
+     */
     protected PhpHighlighter $highlighter;
+
+    /**
+     * Renderer for native and documented PHP types with links to known symbols.
+     *
+     * @var DocTypeRenderer
+     *
+     * @author Oleg Schildt
+     */
     protected DocTypeRenderer $type_renderer;
+
+    /**
+     * Resolver built from the model's symbol index for type and PHPDoc links.
+     *
+     * @var ReferenceResolver
+     *
+     * @author Oleg Schildt
+     */
     protected ReferenceResolver $references;
+
+    /**
+     * Markdown renderer configured for escaped HTML and explicit link resolution.
+     *
+     * @var MarkdownRenderer
+     *
+     * @author Oleg Schildt
+     */
     protected MarkdownRenderer $markdown;
+
+    /**
+     * Generated HTML filenames indexed by normalized absolute Markdown source path.
+     *
+     * @var array<string, string>
+     *
+     * @author Oleg Schildt
+     */
     protected array $markdown_pages = [];
+
+    /**
+     * Generated HTML filenames indexed by normalized Markdown basename, with null for ambiguous names.
+     *
+     * @var array<string, string|null>
+     *
+     * @author Oleg Schildt
+     */
     protected array $markdown_names = [];
+
+    /**
+     * Set of output filenames written in the current staging directory, with lowercase keys on Windows.
+     *
+     * @var array<array-key, true>
+     *
+     * @author Oleg Schildt
+     */
     protected array $written_files = [];
+
+    /**
+     * Template contents cached by filename for the current generation run.
+     *
+     * @var array<string, string>
+     *
+     * @author Oleg Schildt
+     */
     protected array $templates = [];
 
     /**
@@ -92,6 +195,17 @@ class PhpDocGenerator
         }
     } // copyDirContents
 
+    /**
+     * Checks whether a namespace descriptor represents the global namespace with no children.
+     *
+     * @param array{full_name: string, children: array<string, array>, ...} $object_descriptor
+     * The namespace descriptor and its child collections.
+     *
+     * @return bool
+     * Returns true only for the global namespace when all its child collections are empty.
+     *
+     * @author Oleg Schildt
+     */
     protected function isEmptyGlobalNamespase(array &$object_descriptor): bool
     {
         if ($object_descriptor["full_name"] != "\\") {
@@ -111,6 +225,17 @@ class PhpDocGenerator
         return !$not_empty;
     } // isEmptyGlobalNamespase
 
+    /**
+     * Strips everything through the last namespace separator in a name.
+     *
+     * @param string $name
+     * The PHP or documentation name to shorten.
+     *
+     * @return string
+     * Returns the short name, or the original name if it has no namespace separator.
+     *
+     * @author Oleg Schildt
+     */
     protected function removeNamespacePrefix(string $name): string
     {
         return preg_replace("/.*\\\\/", "", $name);
@@ -180,6 +305,18 @@ class PhpDocGenerator
         return $type;
     } // getNameByType
 
+    /**
+     * Converts a documentation name into the filename stem used for its page.
+     *
+     * @param string $name
+     * The full name or relative path stored in the model.
+     *
+     * @return string
+     * Returns the stem with leading and trailing slashes and parentheses removed
+     * and internal slashes converted to dots.
+     *
+     * @author Oleg Schildt
+     */
     protected function objNameToFileName(string $name): string
     {
         $name = trim($name, "/\\()");
@@ -316,6 +453,17 @@ class PhpDocGenerator
         return $anchor;
     } // getAnchor
 
+    /**
+     * Builds the display label for a symbol in the documentation lookup index.
+     *
+     * @param array{name: string, type: string, ...} $object_descriptor
+     * The descriptor containing the display name and declaration kind.
+     *
+     * @return string
+     * Returns the name with a kind suffix where one is defined.
+     *
+     * @author Oleg Schildt
+     */
     protected function getLabel(array $object_descriptor): string
     {
         $label = $object_descriptor["name"];
@@ -417,6 +565,23 @@ class PhpDocGenerator
         );
     } // getPageTemplate
 
+    /**
+     * Fills the namespace list in a page template.
+     *
+     * @param array<string, array<string, mixed>> $object_list
+     * The namespace descriptors to render.
+     *
+     * @param string $contents
+     * The page template to update by reference.
+     *
+     * @param bool $deep
+     * Whether to include immediate child namespaces of each listed namespace.
+     *
+     * @return void
+     * Skips the empty global namespace and optionally includes immediate child namespaces. Clears the index section when the list is empty.
+     *
+     * @author Oleg Schildt
+     */
     protected function renderNamespaceList(array &$object_list, string &$contents, bool $deep = false): void
     {
         $deepCollect = function (&$object_descriptor, &$namespace_array) {
@@ -463,6 +628,20 @@ class PhpDocGenerator
         });
     } // renderNamespaceList
 
+    /**
+     * Fills the package list in a page template.
+     *
+     * @param array<string, array<string, mixed>> $object_list
+     * The package descriptors to render.
+     *
+     * @param string $contents
+     * The page template to update by reference.
+     *
+     * @return void
+     * Skips descriptors whose package name is empty. Clears the index section when the list is empty.
+     *
+     * @author Oleg Schildt
+     */
     protected function renderPackageList(array &$object_list, string &$contents): void
     {
         $package_array = [];
@@ -488,6 +667,20 @@ class PhpDocGenerator
         });
     } // renderPackageList
 
+    /**
+     * Fills the global constant list in a page template.
+     *
+     * @param array<string, array<string, mixed>> $object_list
+     * The global constant descriptors to render.
+     *
+     * @param string $contents
+     * The page template to update by reference.
+     *
+     * @return void
+     * Skips ignored constants and includes the namespace link where available. Clears the index section when the list is empty.
+     *
+     * @author Oleg Schildt
+     */
     protected function renderConstantList(array &$object_list, string &$contents): void
     {
         $constant_array = [];
@@ -524,6 +717,20 @@ class PhpDocGenerator
         });
     } // renderConstantList
 
+    /**
+     * Fills the global variable list in a page template.
+     *
+     * @param array<string, array<string, mixed>> $object_list
+     * The global variable descriptors to render.
+     *
+     * @param string $contents
+     * The page template to update by reference.
+     *
+     * @return void
+     * Skips global variables marked as ignored. Clears the index section when the list is empty.
+     *
+     * @author Oleg Schildt
+     */
     protected function renderGlobalVariableList(array &$object_list, string &$contents): void
     {
         $glovar_array = [];
@@ -595,6 +802,20 @@ class PhpDocGenerator
         $contents = str_replace($object_list_sample, $object_list_body, $contents);
     } // renderGlobalVariableList
 
+    /**
+     * Fills the function list in a page template.
+     *
+     * @param array<string, array<string, mixed>> $object_list
+     * The function descriptors to render.
+     *
+     * @param string $contents
+     * The page template to update by reference.
+     *
+     * @return void
+     * Skips ignored functions and includes the namespace link where available. Clears the index section when the list is empty.
+     *
+     * @author Oleg Schildt
+     */
     protected function renderFunctionList(array &$object_list, string &$contents): void
     {
         $function_array = [];
@@ -629,8 +850,22 @@ class PhpDocGenerator
                 // let body as is.
             }
         });
-    } // renderFuctionList
+    } // renderFunctionList
 
+    /**
+     * Fills the interface list in a page template.
+     *
+     * @param array<string, array<string, mixed>> $object_list
+     * The interface descriptors to render.
+     *
+     * @param string $contents
+     * The page template to update by reference.
+     *
+     * @return void
+     * Skips ignored interfaces and includes the namespace link where available. Clears the index section when the list is empty.
+     *
+     * @author Oleg Schildt
+     */
     protected function renderInterfaceList(array &$object_list, string &$contents): void
     {
         $interface_array = [];
@@ -667,6 +902,20 @@ class PhpDocGenerator
         });
     } // renderInterfaceList
 
+    /**
+     * Fills the list of classes and enums in a page template.
+     *
+     * @param array<string, array<string, mixed>> $object_list
+     * The class and enum descriptors to render.
+     *
+     * @param string $contents
+     * The page template to update by reference.
+     *
+     * @return void
+     * Skips ignored classes and enums and includes the namespace link where available. Clears the index section when the list is empty.
+     *
+     * @author Oleg Schildt
+     */
     protected function renderClassList(array &$object_list, string &$contents): void
     {
         $class_array = [];
@@ -703,6 +952,20 @@ class PhpDocGenerator
         });
     } // renderClassList
 
+    /**
+     * Fills the trait list in a page template.
+     *
+     * @param array<string, array<string, mixed>> $object_list
+     * The trait descriptors to render.
+     *
+     * @param string $contents
+     * The page template to update by reference.
+     *
+     * @return void
+     * Skips ignored traits and includes the namespace link where available. Clears the index section when the list is empty.
+     *
+     * @author Oleg Schildt
+     */
     protected function renderTraitList(array &$object_list, string &$contents): void
     {
         $trait_array = [];
@@ -739,6 +1002,23 @@ class PhpDocGenerator
         });
     } // renderTraitList
 
+    /**
+     * Inserts the current declaration's namespace path and label into the page layout.
+     *
+     * @param string $layout_contents
+     * The page layout with a breadcrumbs placeholder, updated by reference.
+     *
+     * @param string $current_object
+     * The declaration's lookup name, or an empty string for a page without a current declaration.
+     *
+     * @return void
+     * Replaces the breadcrumbs placeholder with the rendered navigation.
+     *
+     * @throws \RuntimeException
+     * If the breadcrumbs template cannot be read.
+     *
+     * @author Oleg Schildt
+     */
     protected function renderBreadcrumbs(string &$layout_contents, string $current_object = ""): void
     {
         $breadcrumbs_contents = $this->getTemplate("breadcrumbs.tpl");
@@ -817,6 +1097,23 @@ class PhpDocGenerator
         $layout_contents = str_ireplace("{breadcrumbs}", $breadcrumbs_contents, $layout_contents);
     } // renderBreadcrumbs
 
+    /**
+     * Inserts the site navigation into the page layout and marks the active menu items.
+     *
+     * @param string $layout_contents
+     * The page layout with a menu placeholder, updated by reference.
+     *
+     * @param string $file_name
+     * The generated filename used to determine which menu items are active.
+     *
+     * @return void
+     * Replaces the menu placeholder with navigation for the available indexes and configured user files.
+     *
+     * @throws \RuntimeException
+     * If the menu template cannot be read.
+     *
+     * @author Oleg Schildt
+     */
     protected function renderMenu(string &$layout_contents, string $file_name): void
     {
         $menu_contents = $this->getTemplate("menu.tpl");
@@ -2486,6 +2783,17 @@ class PhpDocGenerator
         }, $html);
     } // renderMarkdown
 
+    /**
+     * Counts documentation entries that are eligible to appear in lists.
+     *
+     * @param array<array-key, array<string, mixed>> $object_list
+     * The descriptors to inspect for the ignore flag.
+     *
+     * @return int
+     * Returns the number of descriptors with a missing or empty ignore flag.
+     *
+     * @author Oleg Schildt
+     */
     protected function countNotIgnored(array &$object_list): int
     {
         $cnt = 0;

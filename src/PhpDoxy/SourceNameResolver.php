@@ -31,7 +31,8 @@ final class SourceNameResolver extends NameResolver
     {
         parent::enterNode($node);
 
-        if ($node instanceof Node\Stmt\ClassLike || $node instanceof Node\Stmt\Function_
+        if (
+            $node instanceof Node\Stmt\ClassLike || $node instanceof Node\Stmt\Function_
             || $node instanceof Node\Stmt\Const_ || $node instanceof Node\Stmt\Expression
         ) {
             $node->setAttribute('docNameContext', clone $this->getNameContext());
@@ -41,3 +42,4 @@ final class SourceNameResolver extends NameResolver
         return $node instanceof Node\FunctionLike ? NodeTraverser::DONT_TRAVERSE_CHILDREN : null;
     } // enterNode
 } // SourceNameResolver
+

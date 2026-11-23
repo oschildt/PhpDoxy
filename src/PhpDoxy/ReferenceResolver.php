@@ -15,9 +15,40 @@ use PhpParser\Node\Stmt\Use_;
  */
 final class ReferenceResolver
 {
+    /**
+     * Nonconstant symbols indexed by normalized lookup key, with their original model names as values.
+     *
+     * @var array<string, string>
+     *
+     * @author Oleg Schildt
+     */
     private array $symbols = [];
+
+    /**
+     * Class, interface, trait, and enum names indexed by lowercase fully qualified name.
+     *
+     * @var array<string, string>
+     *
+     * @author Oleg Schildt
+     */
     private array $classes = [];
+
+    /**
+     * Global constant names indexed by fully qualified name with only the namespace normalized.
+     *
+     * @var array<string, string>
+     *
+     * @author Oleg Schildt
+     */
     private array $constants = [];
+
+    /**
+     * Fully qualified symbol names grouped by normalized short name for unambiguous fallback lookup.
+     *
+     * @var array<string, list<string>>
+     *
+     * @author Oleg Schildt
+     */
     private array $shortNames = [];
 
     /**
@@ -203,3 +234,4 @@ final class ReferenceResolver
         return strtolower(substr($name, 0, $separator)) . substr($name, $separator);
     } // constantKey
 } // ReferenceResolver
+

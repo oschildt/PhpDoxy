@@ -9,6 +9,13 @@ namespace PhpDoxy;
  */
 class MarkdownRenderer extends \ParsedownExtra
 {
+    /**
+     * Resolver for the current document's link destinations, or null outside a render call.
+     *
+     * @var (\Closure(string): ?string)|null
+     *
+     * @author Oleg Schildt
+     */
     private ?\Closure $resolve_link = null;
 
     /**
@@ -51,7 +58,8 @@ class MarkdownRenderer extends \ParsedownExtra
     {
         $href = $element['attributes']['href'] ?? null;
 
-        if ($this->resolve_link !== null && ($element['name'] ?? '') === 'a' && $href !== null
+        if (
+            $this->resolve_link !== null && ($element['name'] ?? '') === 'a' && $href !== null
             && !in_array($element['attributes']['class'] ?? '', ['footnote-ref', 'footnote-backref'], true)
         ) {
             $href = ($this->resolve_link)($href);
@@ -68,3 +76,4 @@ class MarkdownRenderer extends \ParsedownExtra
         return parent::sanitiseElement($element);
     } // sanitiseElement
 } // MarkdownRenderer
+

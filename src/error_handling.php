@@ -1,5 +1,17 @@
 <?php
 
+/**
+ * Formats an error handler backtrace as diagnostic text.
+ *
+ * @param array<int, array{function: string, args?: array<array-key, mixed>, file?: string, line?: int, ...}> $info
+ * The backtrace passed by reference. Frame zero must contain the error handler arguments,
+ * with the message, filename, and line number at indexes 1, 2, and 3 of `args`.
+ *
+ * @return string
+ * Returns the error details, call stack, and frame summaries, or `backtrace empty` for an empty trace.
+ *
+ * @author Oleg Schildt
+ */
 function format_backtrace(array &$info): string
 {
     if (!isset($info) || count($info) == 0) {
@@ -18,23 +30,6 @@ function format_backtrace(array &$info): string
                 "line: " . $info_entry["args"][3] . "\r\n" .
                 $info_entry["args"][1] . "\r\n";
 
-            // we do not need this
-            if (false && !empty($info_entry["args"][4])) {
-                $trace .= "\r\nLocal variables:\r\n\r\n";
-
-                foreach ($info_entry["args"][4] as $nm => $val) {
-                    $trace .= $nm . " = ";
-                    if (is_array($val)) {
-                        $trace .= deep_implode($val);
-                    } elseif (is_object($val)) {
-                        $trace .= "obj:" . get_class($val);
-                    } else {
-                        $trace .= $val;
-                    }
-                    $trace .= "\r\n";
-                }
-            }
-
             $trace .= "\r\nCall stack:\r\n\r\n" . extract_call_stack($info);
 
             continue;
@@ -49,6 +44,19 @@ function format_backtrace(array &$info): string
     return $trace;
 } // format_backtrace
 
+/**
+ * Formats a nested array as a bracketed diagnostic string.
+ *
+ * @param array<array-key, mixed> $arr
+ * An acyclic array passed by reference. Values may be nested arrays, objects,
+ * or values that can be concatenated as strings.
+ *
+ * @return string
+ * Returns comma-separated entries inside brackets. Scalar entries include their keys,
+ * nested arrays use the same bracketed format, and objects are shown as `obj:` followed by their class name.
+ *
+ * @author Oleg Schildt
+ */
 function deep_implode(array &$arr): string
 {
     $list = "";
@@ -66,9 +74,20 @@ function deep_implode(array &$arr): string
     return "[" . trim($list, ", ") . "]";
 } // deep_implode
 
+/**
+ * Supplies the argument text for a formatted stack frame while argument display is disabled.
+ *
+ * @param array<array-key, mixed> $args
+ * The frame arguments, passed by reference.
+ *
+ * @return string
+ * Always returns an empty string.
+ *
+ * @author Oleg Schildt
+ */
 function make_arg_list(array &$args): string
 {
-    // we do not need this
+    // Argument values are omitted from the formatted backtrace.
     return "";
 
     $list = "";
@@ -86,6 +105,19 @@ function make_arg_list(array &$args): string
     return trim($list, ", ");
 } // make_arg_list
 
+/**
+ * Builds an indented call stack for the backtrace report.
+ *
+ * @param array<array-key, array{function?: string, args?: array<array-key, mixed>, file?: string, line?: int, ...}> $btrace
+ * The backtrace frames in their original order. Frames from error handlers, closures, and
+ * `trigger_error`, along with frames without a filename, are skipped.
+ *
+ * @return string
+ * Returns the formatted frame lines with function names and file locations when available,
+ * or an empty string when no frames qualify.
+ *
+ * @author Oleg Schildt
+ */
 function extract_call_stack(array $btrace): string
 {
     if (empty($btrace) || !is_array($btrace)) {
@@ -98,7 +130,8 @@ function extract_call_stack(array $btrace): string
     foreach ($btrace as $btrace_entry) {
 
 
-        if (!empty($btrace_entry["function"]) &&
+        if (
+            !empty($btrace_entry["function"]) &&
             ($btrace_entry["function"] == "handle_error" ||
                 str_contains($btrace_entry["function"], "{closure}") ||
                 $btrace_entry["function"] == "handleError" ||
@@ -144,3 +177,4 @@ function extract_call_stack(array $btrace): string
 
     return trim($trace);
 } // extract_call_stack
+

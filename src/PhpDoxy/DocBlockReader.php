@@ -20,17 +20,69 @@ use PHPStan\PhpDocParser\ParserConfig;
  */
 final class DocBlockReader
 {
+    /**
+     * Tags whose parsed type nodes are returned with their source positions.
+     *
+     * @var list<string>
+     *
+     * @author Oleg Schildt
+     */
     private const TYPE_TAGS = [
-        '@param', '@return', '@var', '@throws', '@template', '@template-covariant', '@template-contravariant',
+        '@param',
+        '@return',
+        '@var',
+        '@throws',
+        '@template',
+        '@template-covariant',
+        '@template-contravariant',
     ];
 
+    /**
+     * Tags retained in the comment passed to phpDocumentor for descriptive parsing.
+     *
+     * @var list<string>
+     *
+     * @author Oleg Schildt
+     */
     private const METADATA_TAGS = [
-        '@author', '@copyright', '@deprecated', '@ignore', '@internal', '@license', '@link', '@package',
-        '@since', '@todo', '@version',
+        '@author',
+        '@copyright',
+        '@deprecated',
+        '@ignore',
+        '@internal',
+        '@license',
+        '@link',
+        '@package',
+        '@since',
+        '@todo',
+        '@version',
     ];
 
+    /**
+     * Lexer configured to track token positions within doc comments.
+     *
+     * @var Lexer
+     *
+     * @author Oleg Schildt
+     */
     private Lexer $lexer;
+
+    /**
+     * Parser that extracts PHPDoc tag nodes and their positions.
+     *
+     * @var PhpDocParser
+     *
+     * @author Oleg Schildt
+     */
     private PhpDocParser $parser;
+
+    /**
+     * Factory that parses the prose and descriptive tags retained from a doc comment.
+     *
+     * @var DocBlockFactory
+     *
+     * @author Oleg Schildt
+     */
     private DocBlockFactory $factory;
 
     /**
@@ -105,3 +157,4 @@ final class DocBlockReader
         return ['metadata' => $this->factory->create($metadata), 'types' => $types, 'references' => $references];
     } // read
 } // DocBlockReader
+

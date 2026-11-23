@@ -13,6 +13,13 @@ use PhpParser\PrettyPrinter\Standard;
  */
 final class DeclarationPrinter extends Standard
 {
+    /**
+     * Whether array expressions are being printed as part of a constant value.
+     *
+     * @var bool
+     *
+     * @author Oleg Schildt
+     */
     private bool $printingConstant = false;
 
     /**
@@ -61,3 +68,4 @@ final class DeclarationPrinter extends Standard
         return $syntax === Array_::KIND_SHORT ? '[' . $entries . ']' : 'array(' . $entries . ')';
     } // pExpr_Array
 } // DeclarationPrinter
+
