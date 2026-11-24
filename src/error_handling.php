@@ -8,7 +8,8 @@
  * with the message, filename, and line number at indexes 1, 2, and 3 of `args`.
  *
  * @return string
- * Returns the error details, call stack, and frame summaries, or `backtrace empty` for an empty trace.
+ * Returns the error details, call stack, and frame summaries separated by platform-specific line endings,
+ * or `backtrace empty` for an empty trace.
  *
  * @author Oleg Schildt
  */
@@ -22,22 +23,21 @@ function format_backtrace(array &$info): string
 
     foreach ($info as $nr => &$info_entry) {
         if (!empty($trace)) {
-            $trace .= "\r\n------------------\r\n";
+            $trace .= PHP_EOL . "------------------" . PHP_EOL;
         }
 
         if ($nr == 0) {
-            $trace .= $info_entry["args"][2] . "\r\n" .
-                "line: " . $info_entry["args"][3] . "\r\n" .
-                $info_entry["args"][1] . "\r\n";
-
-            $trace .= "\r\nCall stack:\r\n\r\n" . extract_call_stack($info);
+            $trace .= $info_entry["args"][2] . PHP_EOL .
+                "line: " . $info_entry["args"][3] . PHP_EOL .
+                $info_entry["args"][1] . PHP_EOL;
+            $trace .= PHP_EOL . "Call stack:" . PHP_EOL . PHP_EOL . extract_call_stack($info);
 
             continue;
         }
 
         $args = (isset($info_entry["args"])) ? $info_entry["args"] : array();
-        $trace .= ($info_entry["file"] ?? "") . "\r\n" .
-            "line: " . ($info_entry["line"] ?? "") . "\r\n" .
+        $trace .= ($info_entry["file"] ?? "") . PHP_EOL .
+            "line: " . ($info_entry["line"] ?? "") . PHP_EOL .
             $info_entry["function"] . "(" . make_arg_list($args) . ")";
     }
 
@@ -113,8 +113,8 @@ function make_arg_list(array &$args): string
  * `trigger_error`, along with frames without a filename, are skipped.
  *
  * @return string
- * Returns the formatted frame lines with function names and file locations when available,
- * or an empty string when no frames qualify.
+ * Returns the formatted frame lines with function names and file locations when available.
+ * Uses platform-specific line endings and returns an empty string when no frames qualify.
  *
  * @author Oleg Schildt
  */
@@ -170,7 +170,7 @@ function extract_call_stack(array $btrace): string
             $trace .= "  " . $btrace_entry["function"] . "(" . $args_str . ")";
         }
 
-        $trace .= "\r\n";
+        $trace .= PHP_EOL;
 
         $indent .= "  ";
     }

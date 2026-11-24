@@ -24,3 +24,5 @@ require_once "vendor/autoload.php";
         window.scrollTo(0, 10000000);
     </script>
 </body>
+
+</html>

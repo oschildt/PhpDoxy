@@ -81,27 +81,33 @@ There is an example script in *examples/generate.php*.
 
 ```php
 <?php
+
 namespace PhpDoxy;
 
 ob_implicit_flush();
 ob_end_clean();
 
 require_once "vendor/autoload.php";
-?><!DOCTYPE html>
+?>
+<!DOCTYPE html>
 <html lang="en">
+
 <head>
     <title>PhpDoxy - Documentation Generation</title>
-    <meta http-equiv="content-type" content="text/html; charset=utf-8"/>
+    <meta http-equiv="content-type" content="text/html; charset=utf-8" />
 </head>
+
 <body style="background-color:black; margin:0; padding:10px">
-<pre style='color:white; margin:0; padding:0'><?php
+    <pre style='color:white; margin:0; padding:0'><?php
     generate([]);
     ?>
 </pre>
-<script type="text/javascript">
-    window.scrollTo(0, 10000000);
-</script>
+    <script type="text/javascript">
+        window.scrollTo(0, 10000000);
+    </script>
 </body>
+
+</html>
 ```
 
 1. Put the script to the directory of your application. Ensure that the including of the *vendor/autoload.php* is valid.
@@ -137,6 +143,7 @@ The configuration for the documentation generation is setup in the XML file *php
     </sources>
 
     <target>docs</target>
+
     <template>default</template>
 
     <user_files>

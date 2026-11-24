@@ -341,7 +341,7 @@ class PhpDocGenerator
     {
         $escaped = preg_replace_callback(
             '~[^a-z0-9/_-]~i',
-            static fn (array $match): string => '~' . bin2hex($match[0]),
+            static fn(array $match): string => '~' . bin2hex($match[0]),
             $path
         );
 
@@ -560,7 +560,7 @@ class PhpDocGenerator
 
         return preg_replace_callback(
             '/\{[a-z_][a-z0-9_]*\}/i',
-            static fn (array $match): string => $values[strtolower($match[0])] ?? $match[0],
+            static fn(array $match): string => $values[strtolower($match[0])] ?? $match[0],
             $template
         );
     } // getPageTemplate
@@ -1183,9 +1183,11 @@ class PhpDocGenerator
                 $contents .= $item;
             }
 
-            if ($this->countNotIgnored($this->dictionary["todos"]) > 0 ||
+            if (
+                $this->countNotIgnored($this->dictionary["todos"]) > 0 ||
                 $this->countNotIgnored($this->dictionary["since"]) > 0 ||
-                $this->countNotIgnored($this->dictionary["deprecated"]) > 0) {
+                $this->countNotIgnored($this->dictionary["deprecated"]) > 0
+            ) {
                 $item = $matches[1];
                 $item = str_ireplace("{item_target}", "log.html", $item);
                 $item = str_ireplace("{item_title}", "Log", $item);
@@ -1390,7 +1392,8 @@ class PhpDocGenerator
             $body = $this->renderMarkdown($text, directory: dirname($file));
             $title = '';
 
-            if (preg_match('~\A\s*#~', $text)
+            if (
+                preg_match('~\A\s*#~', $text)
                 && preg_match('~\A<h([1-3])\b[^>]*>(.*?)</h\1>~s', $body, $heading)
             ) {
                 $title = trim(html_entity_decode(strip_tags($heading[2]), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
@@ -1464,7 +1467,8 @@ class PhpDocGenerator
         $parts = parse_url($explicit ? substr($url, strlen('markdown:')) : $url);
         $path = rawurldecode($parts['path'] ?? '');
 
-        if (isset($parts['scheme']) || isset($parts['host']) || str_starts_with($path, '/') || str_starts_with($path, '\\')
+        if (
+            isset($parts['scheme']) || isset($parts['host']) || str_starts_with($path, '/') || str_starts_with($path, '\\')
             || str_contains($path, "\0") || strtolower(pathinfo($path, PATHINFO_EXTENSION)) !== 'md'
         ) {
             return $explicit ? null : $url;
@@ -1845,7 +1849,8 @@ class PhpDocGenerator
     {
         echo_standard("\nCreating log file");
 
-        if ($this->countNotIgnored($this->dictionary["todos"]) == 0 &&
+        if (
+            $this->countNotIgnored($this->dictionary["todos"]) == 0 &&
             $this->countNotIgnored($this->dictionary["since"]) == 0 &&
             $this->countNotIgnored($this->dictionary["deprecated"]) == 0
         ) {
@@ -1914,10 +1919,12 @@ class PhpDocGenerator
                 "object_link" => $this->getHelpFile($object_descriptor) . $this->getAnchor($object_descriptor)
             ];
 
-            $object_row['object_deprecated'] = [[
-                'object_version' => htmlspecialchars($object_descriptor['deprecated_version'] ?? ''),
-                'object_description' => $this->formatText($object_descriptor, $object_descriptor['deprecated_description'] ?? ''),
-            ]];
+            $object_row['object_deprecated'] = [
+                [
+                    'object_version' => htmlspecialchars($object_descriptor['deprecated_version'] ?? ''),
+                    'object_description' => $this->formatText($object_descriptor, $object_descriptor['deprecated_description'] ?? ''),
+                ]
+            ];
 
             $object_list[] = $object_row;
         }
@@ -2729,13 +2736,7 @@ class PhpDocGenerator
         $literals = [];
         $directory = $this->sourceDirectory($scope);
         $prefix = 'PhpDoxyLink' . hash('sha256', $text);
-        $text = preg_replace_callback('/\{@(see|link)\s+([^\s{}]+)(?:\s+([^{}]*))?\}/', function (array $matches) use (
-            $scope,
-            $directory,
-            $prefix,
-            &$links,
-            &$literals
-        ): string {
+        $text = preg_replace_callback('/\{@(see|link)\s+([^\s{}]+)(?:\s+([^{}]*))?\}/', function (array $matches) use ($scope, $directory, $prefix, &$links, &$literals): string {
             $reference = $matches[2];
             $label = trim($matches[3] ?? '') ?: $reference;
             $href = preg_match('~^https?://~i', $reference) ? $reference : null;
@@ -2778,7 +2779,7 @@ class PhpDocGenerator
      */
     protected function renderMarkdown(string $text, array $literals = [], ?string $directory = null): string
     {
-        $html = $this->markdown->render($text, fn (string $url): ?string => $this->resolveMarkdownLink($url, $directory));
+        $html = $this->markdown->render($text, fn(string $url): ?string => $this->resolveMarkdownLink($url, $directory));
 
         return preg_replace_callback('~<code([^>]*)>(.*?)</code>~s', function (array $matches) use ($literals): string {
             $code = strtr($matches[2], $literals);
@@ -2883,3 +2884,4 @@ class PhpDocGenerator
         echo_highlighted("\n\nHelp files generation completed");
     } // generate
 } // PhpDocGenerator
+
